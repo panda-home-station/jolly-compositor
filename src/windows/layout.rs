@@ -31,7 +31,7 @@ pub struct Layouts {
     /// This stores the layout from which the active layout was created and its
     /// respective ancestors. Used to restore the previous layout after the
     /// window is closed.
-    parent_layouts: Vec<LayoutId>,
+    pub parent_layouts: Vec<LayoutId>,
 
     transactions: Vec<Transaction>,
     active_layout: Option<usize>,
@@ -612,7 +612,7 @@ impl Layouts {
 pub struct Layout {
     primary: Option<Rc<RefCell<Window>>>,
     secondary: Option<Rc<RefCell<Window>>>,
-    id: LayoutId,
+    pub id: LayoutId,
 }
 
 impl Layout {
@@ -668,7 +668,7 @@ impl Layout {
 
 /// Unique layout ID.
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
-struct LayoutId(u64);
+pub struct LayoutId(pub u64);
 
 /// Transactional layout change.
 #[derive(Debug)]

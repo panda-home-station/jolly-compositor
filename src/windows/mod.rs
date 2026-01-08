@@ -216,9 +216,22 @@ impl Windows {
             };
 
             if is_overlay {
+                info!("focus_app: Switching to Overlay (position {:?}). Pushing active to parent.", position);
                 self.layouts.push_active_to_parent();
                 self.layouts.set_active(&self.output, Some(position), false);
+                
+                // Ensure view is Workspace or Fullscreen(overlay) so it actually renders
+                if matches!(self.view, View::Fullscreen(_)) {
+                    // If we were in fullscreen app, we need to switch view to overlay if we want it on top
+                    // Or if we want overlay ON TOP of fullscreen, we need to handle that.
+                    // For now, let's try switching to Workspace view which handles layers + layouts
+                    self.set_view(View::Workspace);
+                }
+                
+                // FORCE RESIZE to ensure it renders on top
+                self.resize_visible();
             } else {
+                info!("focus_app: Switching to normal app (position {:?}). Clearing parents.", position);
                 self.layouts.set_active(&self.output, Some(position), true);
             }
             true
@@ -280,6 +293,19 @@ impl Windows {
                     false
                 }
             });
+
+            // If we have a parent history, use it first!
+            let parent_layout_id = self.layouts.parent_layouts.last().copied();
+            
+            if let Some(parent_id) = parent_layout_id {
+                 info!("toggle_app: Found parent layout ID {:?}, switching back to it.", parent_id);
+                 if let Some(index) = self.layouts.layouts().iter().position(|l| l.id == parent_id) {
+                     self.layouts.set_active(&self.output, Some(LayoutPosition::new(index, false)), true);
+                     return true;
+                 } else {
+                     info!("toggle_app: Parent layout ID {:?} not found in current layouts, falling back.", parent_id);
+                 }
+            }
 
             if let Some(index) = desktop_index {
                  info!("toggle_app: Switching explicitly to Desktop at index {}", index);
@@ -346,8 +372,15 @@ impl Windows {
         // Auto-focus the new window
         self.layouts.focus = Some(Rc::downgrade(&window));
 
-        // Switch view to Fullscreen immediately
-        self.view = View::Fullscreen(window.clone());
+        // Only switch to Fullscreen if it's NOT the overlay
+        let is_overlay = window.borrow().title().unwrap_or_default() == "JollyPad-Overlay";
+        if !is_overlay {
+            // Switch view to Fullscreen immediately for normal apps
+            self.view = View::Fullscreen(window.clone());
+        } else {
+            // For overlay, ensure we stay in Workspace mode so we can see underlay
+            self.view = View::Workspace;
+        }
     }
 
     /// Add a new layer shell window.
