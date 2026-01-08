@@ -538,6 +538,7 @@ impl Windows {
 
         // Draw gesture handle when not in fullscreen/lock view.
         if !matches!(self.view, View::Fullscreen(_) | View::Lock(_)) {
+            /*
             // Get texture for gesture handle.
             let gesture_handle = graphics.gesture_handle(renderer, &self.canvas, self.ime_override);
 
@@ -557,6 +558,7 @@ impl Windows {
                 None,
                 scale,
             );
+            */
         }
 
         // Render touch location cursor.
