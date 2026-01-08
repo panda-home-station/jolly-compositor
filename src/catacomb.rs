@@ -18,6 +18,7 @@ use smithay::input::keyboard::XkbConfig;
 use smithay::input::{Seat, SeatHandler, SeatState};
 use smithay::reexports::calloop::generic::{Generic, NoIoDrop};
 use smithay::reexports::calloop::signals::{Signal, Signals};
+use smithay::reexports::calloop::timer::Timer;
 use smithay::reexports::calloop::{
     Interest, LoopHandle, Mode as TriggerMode, PostAction, RegistrationToken,
 };
@@ -32,6 +33,7 @@ use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{Client, Display, DisplayHandle, Resource};
 use smithay::utils::{Logical, Point, Rectangle, SERIAL_COUNTER, Serial};
 use smithay::wayland::buffer::BufferHandler;
+use gilrs::Gilrs;
 use smithay::wayland::compositor;
 use smithay::wayland::compositor::{CompositorClientState, CompositorHandler, CompositorState};
 use smithay::wayland::dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier};
@@ -129,6 +131,7 @@ pub struct Catacomb {
     pub seat: Seat<Self>,
     pub terminated: bool,
     pub backend: Udev,
+    pub gilrs: Gilrs,
 
     // Smithay state.
     pub idle_notifier_state: IdleNotifierState<Self>,
@@ -322,7 +325,17 @@ impl Catacomb {
             },
         }
 
+        // Initialize Gilrs.
+        let gilrs = Gilrs::new().expect("Failed to initialize Gilrs");
+
+        // Start gamepad polling.
+        let timer = Timer::from_duration(std::time::Duration::from_millis(16));
+        event_loop
+            .insert_source(timer, Self::poll_gamepad)
+            .expect("failed to schedule gamepad polling");
+
         Self {
+            gilrs,
             keyboard_shortcuts_inhibit_state,
             primary_selection_state,
             xdg_activation_state,

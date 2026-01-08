@@ -2,6 +2,7 @@
 
 use std::time::{Duration, Instant};
 
+use gilrs::{Button, Event as GilrsEvent, EventType as GilrsEventType};
 use catacomb_ipc::{GestureSector, KeyTrigger, Keysym, Modifiers};
 use smithay::backend::input::{
     AbsolutePositionEvent, ButtonState, Event, InputBackend, InputEvent, KeyState,
@@ -863,7 +864,7 @@ impl Catacomb {
 
         // Get desired action for this key.
         let action = keyboard.input(self, code, state, serial, time, |catacomb, mods, keysym| {
-            Self::keyboard_action(catacomb, mods, keysym, state)
+            Self::keyboard_action(catacomb, mods, keysym, code, state)
         });
 
         // Dispatch input action.
@@ -947,6 +948,7 @@ impl Catacomb {
         catacomb: &mut Catacomb,
         mods: &ModifiersState,
         keysym: KeysymHandle,
+        code: Keycode,
         state: KeyState,
     ) -> FilterResult<InputAction> {
         match (keysym.modified_sym().raw(), state) {
@@ -954,9 +956,16 @@ impl Catacomb {
                 let vt = (keysym - keysyms::KEY_XF86Switch_VT_1 + 1) as i32;
                 InputAction::ChangeVt(vt).into()
             },
-            (_, state) => match keysym.raw_syms().first() {
-                Some(keysym) => Self::handle_user_binding(catacomb, mods, keysym.raw(), state),
-                None => FilterResult::Forward,
+            (_, state) => {
+                // Handle BTN_MODE (316 + 8 = 324) explicitly
+                if code.raw() == 324 {
+                    return Self::handle_user_binding(catacomb, mods, Keysym::BtnMode, state);
+                }
+
+                match keysym.raw_syms().first() {
+                    Some(keysym) => Self::handle_user_binding(catacomb, mods, Keysym::Xkb(keysym.raw()), state),
+                    None => FilterResult::Forward,
+                }
             },
         }
     }
@@ -965,7 +974,7 @@ impl Catacomb {
     fn handle_user_binding(
         catacomb: &mut Catacomb,
         mods: impl Into<Modifiers>,
-        raw_keysym: u32,
+        key: Keysym,
         state: KeyState,
     ) -> FilterResult<InputAction> {
         // Cancel active key repeat timers.
@@ -994,7 +1003,7 @@ impl Catacomb {
         // based on the origin state.
         let pressed = state == KeyState::Pressed;
         if pressed {
-            catacomb.active_keys.insert(Keysym::Xkb(raw_keysym));
+            catacomb.active_keys.insert(key);
         }
 
         // Execute all matching keybindings.
@@ -1031,7 +1040,7 @@ impl Catacomb {
 
         // Update list of pressed keys.
         if !pressed {
-            catacomb.active_keys.remove(&Keysym::Xkb(raw_keysym));
+            catacomb.active_keys.remove(&key);
         }
 
         filter_result
@@ -1057,6 +1066,63 @@ impl Catacomb {
         };
 
         (x, y).into()
+    }
+
+    /// Poll gamepad events.
+    pub fn poll_gamepad(_: Instant, _: &mut (), catacomb: &mut Self) -> TimeoutAction {
+        while let Some(event) = catacomb.gilrs.next_event() {
+            catacomb.handle_gamepad_event(event);
+        }
+        TimeoutAction::ToDuration(Duration::from_millis(16))
+    }
+
+    /// Handle a gamepad event.
+     fn handle_gamepad_event(&mut self, event: GilrsEvent) {
+         match event.event {
+             GilrsEventType::ButtonPressed(button, _) => {
+                  match button {
+                      Button::Mode => {
+                          let mods = ModifiersState::default();
+                         let key = Keysym::BtnMode;
+                         let state = KeyState::Pressed;
+                         let _ = Self::handle_user_binding(self, &mods, key, state);
+                     },
+                     Button::DPadUp => self.simulate_key(keysyms::KEY_Up, KeyState::Pressed),
+                     Button::DPadDown => self.simulate_key(keysyms::KEY_Down, KeyState::Pressed),
+                     Button::DPadLeft => self.simulate_key(keysyms::KEY_Left, KeyState::Pressed),
+                     Button::DPadRight => self.simulate_key(keysyms::KEY_Right, KeyState::Pressed),
+                     Button::South => self.simulate_key(keysyms::KEY_Return, KeyState::Pressed),
+                     Button::East => self.simulate_key(keysyms::KEY_Escape, KeyState::Pressed),
+                     _ => {}
+                 }
+            },
+            GilrsEventType::ButtonReleased(button, _) => {
+                match button {
+                    Button::Mode => {
+                         let mods = ModifiersState::default();
+                         let key = Keysym::BtnMode;
+                         let state = KeyState::Released;
+                         let _ = Self::handle_user_binding(self, &mods, key, state);
+                    },
+                     Button::DPadUp => self.simulate_key(keysyms::KEY_Up, KeyState::Released),
+                     Button::DPadDown => self.simulate_key(keysyms::KEY_Down, KeyState::Released),
+                     Button::DPadLeft => self.simulate_key(keysyms::KEY_Left, KeyState::Released),
+                     Button::DPadRight => self.simulate_key(keysyms::KEY_Right, KeyState::Released),
+                     Button::South => self.simulate_key(keysyms::KEY_Return, KeyState::Released),
+                     Button::East => self.simulate_key(keysyms::KEY_Escape, KeyState::Released),
+                     _ => {}
+                }
+            },
+             _ => {}
+         }
+     }
+
+    /// Simulate a key press/release.
+    fn simulate_key(&mut self, keysym: u32, state: KeyState) {
+        let keycodes = self.keysym_to_keycode(keysym);
+        if let Some(keycode) = keycodes.first() {
+             self.on_keyboard_input(*keycode, state, 0);
+        }
     }
 
     /// Convert Keysym to Keycode.

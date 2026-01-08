@@ -516,6 +516,7 @@ pub enum Keysym {
     EnableVirtualKeyboard,
     DisableVirtualKeyboard,
     AutoVirtualKeyboard,
+    BtnMode,
     Xkb(u32),
 }
 
@@ -528,6 +529,7 @@ impl FromStr for Keysym {
             "enablevirtualkeyboard" => return Ok(Self::EnableVirtualKeyboard),
             "disablevirtualkeyboard" => return Ok(Self::DisableVirtualKeyboard),
             "autovirtualkeyboard" => return Ok(Self::AutoVirtualKeyboard),
+            "btn_mode" => return Ok(Self::BtnMode),
             _ => (),
         }
 
