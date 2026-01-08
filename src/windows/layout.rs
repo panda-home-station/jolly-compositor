@@ -93,6 +93,39 @@ impl Layouts {
         -(self.active_layout.unwrap_or(0) as f64)
     }
 
+    /// Push the current active layout to the parent stack.
+    pub fn push_active_to_parent(&mut self) {
+        let active_layout = self.active();
+        if active_layout.id != DEFAULT_LAYOUT.id {
+            self.parent_layouts.push(active_layout.id);
+        }
+    }
+
+    /// Add textures of the parent/underlay layout to the supplied buffer.
+    pub fn textures_underlay(&self, textures: &mut Vec<CatacombElement>, scale: f64) {
+        if let Some(parent_id) = self.parent_layouts.last() {
+            if let Some(layout) = self.layouts.iter().find(|l| &l.id == parent_id) {
+                if let Some(secondary) = layout.secondary().map(|window| window.borrow()) {
+                    secondary.textures(textures, scale, None, None);
+                }
+                if let Some(primary) = layout.primary().map(|window| window.borrow()) {
+                    primary.textures(textures, scale, None, None);
+                }
+            }
+        } else if let Some(layout) = self.layouts.first() {
+             // Fallback to first layout (Desktop) if no parent
+             // Only if the current active layout is NOT the first one (to avoid self-render)
+             if self.active_layout != Some(0) {
+                if let Some(secondary) = layout.secondary().map(|window| window.borrow()) {
+                    secondary.textures(textures, scale, None, None);
+                }
+                if let Some(primary) = layout.primary().map(|window| window.borrow()) {
+                    primary.textures(textures, scale, None, None);
+                }
+             }
+        }
+    }
+
     /// Create and activate a new layout using the desired primary window.
     pub fn create(&mut self, output: &Output, primary: Rc<RefCell<Window>>) {
         // Update ancestors.

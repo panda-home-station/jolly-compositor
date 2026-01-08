@@ -206,7 +206,21 @@ impl Windows {
 
         // Switch to the found window.
         if let Some(position) = position {
-            self.layouts.set_active(&self.output, Some(position), true);
+            // Special handling for Overlay to preserve parent history
+            let is_overlay = {
+                if let Some(layout) = self.layouts.get(position.index) {
+                     layout.primary().map(|w| w.borrow().title().unwrap_or_default() == "JollyPad-Overlay").unwrap_or(false)
+                } else {
+                    false
+                }
+            };
+
+            if is_overlay {
+                self.layouts.push_active_to_parent();
+                self.layouts.set_active(&self.output, Some(position), false);
+            } else {
+                self.layouts.set_active(&self.output, Some(position), true);
+            }
             true
         } else {
             info!("focus_app: No matching window found.");
@@ -590,6 +604,12 @@ impl Windows {
 
                 self.layouts.textures(&mut self.textures, scale);
 
+                // If active layout is overlay, render underlay behind it
+                let is_overlay = self.layouts.active().primary().map(|w| w.borrow().title().unwrap_or_default() == "JollyPad-Overlay").unwrap_or(false);
+                if is_overlay {
+                    self.layouts.textures_underlay(&mut self.textures, scale);
+                }
+
                 for layer in self.layers.background() {
                     layer.textures(&mut self.textures, scale, None, None);
                 }
@@ -622,6 +642,12 @@ impl Windows {
                 }
 
                 window.borrow().textures(&mut self.textures, scale, None, None);
+                
+                // If fullscreen window is overlay, render underlay behind it
+                let is_overlay = window.borrow().title().unwrap_or_default() == "JollyPad-Overlay";
+                if is_overlay {
+                    self.layouts.textures_underlay(&mut self.textures, scale);
+                }
             },
             View::Lock(Some(window)) => window.textures(&mut self.textures, scale, None, None),
             View::Lock(None) => (),
