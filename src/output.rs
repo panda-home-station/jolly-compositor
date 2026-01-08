@@ -16,7 +16,7 @@ use crate::catacomb::Catacomb;
 use crate::orientation::Orientation;
 
 /// Height at bottom of the screen reserved for gestures at scale factor 1.
-pub const GESTURE_HANDLE_HEIGHT: i32 = 15;
+pub const GESTURE_HANDLE_HEIGHT: i32 = 0;
 
 /// Use a fixed output scale.
 const SCALE: f64 = 2.;
@@ -216,7 +216,10 @@ impl Canvas {
     /// for compositor controls.
     pub fn wm_size(&self) -> Size<i32, Logical> {
         let mut size = self.size();
-        size.h -= GESTURE_HANDLE_HEIGHT;
+        #[allow(clippy::const_is_empty)]
+        if GESTURE_HANDLE_HEIGHT > 0 {
+             size.h -= GESTURE_HANDLE_HEIGHT;
+        }
         size
     }
 
