@@ -6,7 +6,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 
-use catacomb_ipc::{AppIdMatcher, CliToggle, IpcMessage, Keysym, WindowScale};
+use catacomb_ipc::{AppIdMatcher, CliToggle, ClientInfo, IpcMessage, Keysym, WindowScale};
 use smithay::input::keyboard::XkbConfig;
 use smithay::reexports::calloop::LoopHandle;
 use tracing::{error, warn};
@@ -60,6 +60,28 @@ fn handle_message(buffer: &mut String, mut stream: UnixStream, catacomb: &mut Ca
     match message {
         IpcMessage::Orientation { unlock: true, .. } => catacomb.unlock_orientation(),
         IpcMessage::Orientation { lock: orientation, .. } => catacomb.lock_orientation(orientation),
+        IpcMessage::Focus { app_id } => {
+            let app_id = match AppIdMatcher::try_from(app_id) {
+                Ok(app_id) => app_id,
+                Err(err) => {
+                    warn!("ignoring invalid ipc message: focus has invalid App ID regex: {err}");
+                    return;
+                },
+            };
+
+            catacomb.focus_app(app_id);
+        },
+        IpcMessage::Exec { command } => {
+            let _ = std::process::Command::new("sh").arg("-c").arg(command).spawn();
+        },
+        IpcMessage::GetActiveWindow => {
+            let (title, app_id) = catacomb.active_window_info().unwrap_or_default();
+            send_reply(&mut stream, &IpcMessage::ActiveWindow { title, app_id });
+        },
+        IpcMessage::GetClients => {
+            let clients = catacomb.clients_info();
+            send_reply(&mut stream, &IpcMessage::Clients { clients });
+        },
         IpcMessage::Scale { scale, app_id: Some(app_id) } => {
             let app_id = match AppIdMatcher::try_from(app_id) {
                 Ok(app_id) => app_id,
@@ -167,7 +189,7 @@ fn handle_message(buffer: &mut String, mut stream: UnixStream, catacomb: &mut Ca
             catacomb.draw_cursor = state == CliToggle::On;
         },
         // Ignore IPC replies.
-        IpcMessage::DpmsReply { .. } => (),
+        IpcMessage::DpmsReply { .. } | IpcMessage::ActiveWindow { .. } | IpcMessage::Clients { .. } => (),
     }
 }
 

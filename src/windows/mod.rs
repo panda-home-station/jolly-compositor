@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use _decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode;
-use catacomb_ipc::{AppIdMatcher, WindowScale};
+use catacomb_ipc::{AppIdMatcher, ClientInfo, WindowScale};
 use smithay::backend::drm::DrmEventMetadata;
 use smithay::backend::renderer::element::{Element, RenderElementStates};
 use smithay::backend::renderer::gles::GlesRenderer;
@@ -154,6 +154,64 @@ impl Windows {
             layers: Default::default(),
             view: Default::default(),
         }
+    }
+
+    /// Focus the first window matching the App ID.
+    pub fn focus_app(&mut self, app_id: AppIdMatcher) -> bool {
+        // Find window position for the requested App ID.
+        let position = self.layouts.layouts().iter().enumerate().find_map(|(i, layout)| {
+            // Check primary window.
+            if let Some(primary) = layout.primary() {
+                if let Some(id) = &primary.borrow().app_id {
+                    if app_id.matches(Some(id)) {
+                        return Some(LayoutPosition::new(i, false));
+                    }
+                }
+            }
+
+            // Check secondary window.
+            if let Some(secondary) = layout.secondary() {
+                if let Some(id) = &secondary.borrow().app_id {
+                    if app_id.matches(Some(id)) {
+                        return Some(LayoutPosition::new(i, true));
+                    }
+                }
+            }
+
+            None
+        });
+
+        // Switch to the found window.
+        if let Some(position) = position {
+            self.layouts.set_active(&self.output, Some(position), true);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Get active window info (title, app_id).
+    pub fn active_window_info(&self) -> Option<(String, String)> {
+        if let Some(weak) = self.layouts.focus.as_ref() {
+            if let Some(window_rc) = weak.upgrade() {
+                let window = window_rc.borrow();
+                let app_id = window.app_id.clone().unwrap_or_default();
+                let title = window.title().unwrap_or_default();
+                return Some((title, app_id));
+            }
+        }
+        None
+    }
+
+    /// Get list of clients.
+    pub fn clients_info(&self) -> Vec<ClientInfo> {
+        self.layouts
+            .windows()
+            .map(|window| ClientInfo {
+                title: window.title().unwrap_or_default(),
+                app_id: window.app_id.clone().unwrap_or_default(),
+            })
+            .collect()
     }
 
     /// Add a new window.

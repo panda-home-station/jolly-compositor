@@ -11,7 +11,7 @@ use std::{cmp, env, mem};
 use _decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode;
 use _server_decoration::server::org_kde_kwin_server_decoration_manager::Mode as ManagerMode;
 use calloop::Mode;
-use catacomb_ipc::{Keysym, Orientation};
+use catacomb_ipc::{AppIdMatcher, ClientInfo, Keysym, Orientation};
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::renderer::ImportDma;
 use smithay::input::keyboard::XkbConfig;
@@ -441,6 +441,23 @@ impl Catacomb {
 
         // Request new frames for visible windows.
         self.windows.request_frames();
+    }
+
+    /// Focus a window by App ID.
+    pub fn focus_app(&mut self, app_id: AppIdMatcher) {
+        if self.windows.focus_app(app_id) {
+            self.unstall();
+        }
+    }
+
+    /// Get active window info.
+    pub fn active_window_info(&self) -> Option<(String, String)> {
+        self.windows.active_window_info()
+    }
+
+    /// Get list of clients.
+    pub fn clients_info(&self) -> Vec<ClientInfo> {
+        self.windows.clients_info()
     }
 
     /// Focus a new surface.

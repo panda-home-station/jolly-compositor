@@ -190,6 +190,40 @@ pub enum IpcMessage {
         /// Desired touch cursor visibility.
         state: CliToggle,
     },
+    /// Focus a window by App ID.
+    Focus {
+        /// App ID regex to match.
+        app_id: String,
+    },
+    /// Execute a command.
+    Exec {
+        /// Command to execute.
+        command: String,
+    },
+    /// Get the active window info.
+    GetActiveWindow,
+    /// Get the list of windows.
+    GetClients,
+    /// Active window info reply.
+    #[cfg_attr(feature = "clap", clap(skip))]
+    ActiveWindow {
+        title: String,
+        app_id: String,
+    },
+    /// Clients list reply.
+    #[cfg_attr(feature = "clap", clap(skip))]
+    Clients {
+        clients: Vec<ClientInfo>,
+    },
+}
+
+/// Window client information.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClientInfo {
+    /// Window title.
+    pub title: String,
+    /// App ID.
+    pub app_id: String,
 }
 
 /// Device orientation.

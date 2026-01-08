@@ -145,6 +145,18 @@ impl<S: Surface + 'static> Window<S> {
         }
     }
 
+    /// Get the window title.
+    pub fn title(&self) -> Option<String> {
+        compositor::with_states(self.surface.surface(), |states| {
+            states
+                .data_map
+                .get::<Mutex<XdgToplevelSurfaceRoleAttributes>>()
+                .and_then(|attributes| attributes.lock().ok())
+                .map(|attrs| attrs.title.clone())
+        })
+        .flatten()
+    }
+
     /// Check window liveliness.
     pub fn alive(&self) -> bool {
         !self.dead && self.surface.alive()
