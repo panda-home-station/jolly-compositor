@@ -72,7 +72,10 @@ fn handle_message(buffer: &mut String, mut stream: UnixStream, catacomb: &mut Ca
             catacomb.focus_app(app_id);
         },
         IpcMessage::Exec { command } => {
-            let _ = std::process::Command::new("sh").arg("-c").arg(command).spawn();
+            match std::process::Command::new("sh").arg("-c").arg(&command).spawn() {
+                Ok(_) => tracing::info!("IPC Exec spawned: {}", command),
+                Err(e) => tracing::error!("IPC Exec failed: {} - {}", command, e),
+            }
         },
         IpcMessage::GetActiveWindow => {
             let (title, app_id) = catacomb.active_window_info().unwrap_or_default();

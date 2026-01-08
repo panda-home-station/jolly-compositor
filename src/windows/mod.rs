@@ -195,7 +195,8 @@ impl Windows {
         if let Some(weak) = self.layouts.focus.as_ref() {
             if let Some(window_rc) = weak.upgrade() {
                 let window = window_rc.borrow();
-                let app_id = window.app_id.clone().unwrap_or_default();
+                // Prefer xdg_app_id if available, fallback to window.app_id
+                let app_id = window.xdg_app_id().or(window.app_id.clone()).unwrap_or_default();
                 let title = window.title().unwrap_or_default();
                 return Some((title, app_id));
             }
@@ -209,7 +210,7 @@ impl Windows {
             .windows()
             .map(|window| ClientInfo {
                 title: window.title().unwrap_or_default(),
-                app_id: window.app_id.clone().unwrap_or_default(),
+                app_id: window.xdg_app_id().or(window.app_id.clone()).unwrap_or_default(),
             })
             .collect()
     }
@@ -218,31 +219,25 @@ impl Windows {
     pub fn add(&mut self, surface: ToplevelSurface) {
         // Set general window states.
         surface.with_pending_state(|state| {
-            // Mark window as tiled, using maximized fallback if tiling is unsupported.
-            if surface.version() >= 2 {
-                state.states.set(State::TiledBottom);
-                state.states.set(State::TiledRight);
-                state.states.set(State::TiledLeft);
-                state.states.set(State::TiledTop);
-            } else {
-                state.states.set(State::Maximized);
-            }
+            // Force Fullscreen for handheld experience
+            state.states.set(State::Fullscreen);
+            state.states.set(State::Activated);
 
             // Always use server-side decoration.
             state.decoration_mode = Some(DecorationMode::ServerSide);
-
-            // Activate by default to avoid reconfigure.
-            state.states.set(State::Activated);
         });
 
         let transform = self.output.orientation().surface_transform();
         let scale = self.output.scale();
 
         let window = Rc::new(RefCell::new(Window::new(surface, scale, transform, None)));
-        self.layouts.create(&self.output, window);
+        self.layouts.create(&self.output, window.clone());
 
-        // Leave fullscreen if it is currently active.
-        self.unfullscreen(None);
+        // Auto-focus the new window
+        self.layouts.focus = Some(Rc::downgrade(&window));
+
+        // Switch view to Fullscreen immediately
+        self.view = View::Fullscreen(window.clone());
     }
 
     /// Add a new layer shell window.

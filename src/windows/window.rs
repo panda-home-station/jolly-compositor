@@ -157,6 +157,18 @@ impl<S: Surface + 'static> Window<S> {
         .flatten()
     }
 
+    /// Get the window app_id from XDG attributes.
+    pub fn xdg_app_id(&self) -> Option<String> {
+        compositor::with_states(self.surface.surface(), |states| {
+            states
+                .data_map
+                .get::<Mutex<XdgToplevelSurfaceRoleAttributes>>()
+                .and_then(|attributes| attributes.lock().ok())
+                .map(|attrs| attrs.app_id.clone())
+        })
+        .flatten()
+    }
+
     /// Check window liveliness.
     pub fn alive(&self) -> bool {
         !self.dead && self.surface.alive()
