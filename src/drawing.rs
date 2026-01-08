@@ -36,15 +36,19 @@ const URGENCY_ICON_RGBA: [u8; 4] = [172, 66, 66, 255];
 const DROP_TARGET_RGBA: [u8; 4] = [32, 32, 32, 64];
 
 /// Relative size of gesture notch to the handle's whole width/height.
+#[allow(dead_code)]
 const GESTURE_NOTCH_PERCENTAGE: f64 = 0.2;
 
 /// Gesture handle color with automatic IME control.
+#[allow(dead_code)]
 const GESTURE_HANDLE_DEFAULT_RGB: [u8; 3] = [255; 3];
 
 /// Gesture handle color with IME force-enabled.
+#[allow(dead_code)]
 const GESTURE_HANDLE_LOCKED_RGB: [u8; 3] = [42, 117, 42];
 
 /// Gesture handle color with IME force-disabled.
+#[allow(dead_code)]
 const GESTURE_HANDLE_BLOCKED_RGB: [u8; 3] = [117, 42, 42];
 
 /// Color of the touch cursor.
@@ -441,8 +445,11 @@ pub struct Graphics {
     pub urgency_icon: RenderTexture,
     pub drop_target: RenderTexture,
 
+    #[allow(dead_code)]
     gesture_handle_default: Option<RenderTexture>,
+    #[allow(dead_code)]
     gesture_handle_blocked: Option<RenderTexture>,
+    #[allow(dead_code)]
     gesture_handle_locked: Option<RenderTexture>,
     cursor: Option<RenderTexture>,
 }
@@ -465,6 +472,7 @@ impl Graphics {
     }
 
     /// Get texture for the gesture handle.
+    #[allow(dead_code)]
     pub fn gesture_handle(
         &mut self,
         renderer: &mut GlesRenderer,
