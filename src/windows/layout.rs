@@ -6,6 +6,8 @@ use std::mem;
 use std::rc::{Rc, Weak};
 use std::sync::atomic::{self, AtomicU64};
 
+use tracing::info;
+
 use smithay::utils::{Logical, Point};
 use smithay::wayland::shell::xdg::ToplevelSurface;
 
@@ -162,6 +164,9 @@ impl Layouts {
         };
 
         let target_layout = (active_index as isize + n).rem_euclid(layout_count as isize);
+        
+        info!("cycle_active: layouts={}, active={}, target={}, n={}", layout_count, active_index, target_layout, n);
+
         let position = LayoutPosition::new(target_layout as usize, false);
         self.set_active(output, Some(position), true);
     }

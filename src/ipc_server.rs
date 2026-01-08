@@ -6,7 +6,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 
-use catacomb_ipc::{AppIdMatcher, CliToggle, ClientInfo, IpcMessage, Keysym, WindowScale};
+use catacomb_ipc::{AppIdMatcher, CliToggle, IpcMessage, Keysym, WindowScale};
 use smithay::input::keyboard::XkbConfig;
 use smithay::reexports::calloop::LoopHandle;
 use tracing::{error, warn};
@@ -70,6 +70,17 @@ fn handle_message(buffer: &mut String, mut stream: UnixStream, catacomb: &mut Ca
             };
 
             catacomb.focus_app(app_id);
+        },
+        IpcMessage::ToggleWindow { app_id } => {
+            let app_id = match AppIdMatcher::try_from(app_id) {
+                Ok(app_id) => app_id,
+                Err(err) => {
+                    warn!("ignoring invalid ipc message: toggle has invalid App ID regex: {err}");
+                    return;
+                },
+            };
+
+            catacomb.windows.toggle_app(app_id);
         },
         IpcMessage::Exec { command } => {
             match std::process::Command::new("sh").arg("-c").arg(&command).spawn() {

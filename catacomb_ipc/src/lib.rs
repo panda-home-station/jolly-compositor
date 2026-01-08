@@ -204,6 +204,11 @@ pub enum IpcMessage {
     GetActiveWindow,
     /// Get the list of windows.
     GetClients,
+    /// Toggle window visibility.
+    ToggleWindow {
+        /// App ID regex to match.
+        app_id: String,
+    },
     /// Active window info reply.
     #[cfg_attr(feature = "clap", clap(skip))]
     ActiveWindow {

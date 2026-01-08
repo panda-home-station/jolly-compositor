@@ -6,6 +6,7 @@ use std::mem;
 use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, UNIX_EPOCH};
+use tracing::info;
 
 use _decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode;
 use catacomb_ipc::{AppIdMatcher, ClientInfo, WindowScale};
@@ -158,12 +159,24 @@ impl Windows {
 
     /// Focus the first window matching the App ID.
     pub fn focus_app(&mut self, app_id: AppIdMatcher) -> bool {
+        info!("focus_app: Request to focus {:?}", app_id);
+        
         // Find window position for the requested App ID.
         let position = self.layouts.layouts().iter().enumerate().find_map(|(i, layout)| {
             // Check primary window.
             if let Some(primary) = layout.primary() {
-                if let Some(id) = &primary.borrow().app_id {
-                    if app_id.matches(Some(id)) {
+                let window = primary.borrow();
+                let xdg_id = window.xdg_app_id();
+                let id = xdg_id.as_ref().or(window.app_id.as_ref());
+                let title = window.title();
+
+                if app_id.matches(id) {
+                    return Some(LayoutPosition::new(i, false));
+                }
+                
+                // Fallback: Check title
+                if let Some(t) = &title {
+                    if app_id.matches(Some(t)) {
                         return Some(LayoutPosition::new(i, false));
                     }
                 }
@@ -171,8 +184,18 @@ impl Windows {
 
             // Check secondary window.
             if let Some(secondary) = layout.secondary() {
-                if let Some(id) = &secondary.borrow().app_id {
-                    if app_id.matches(Some(id)) {
+                let window = secondary.borrow();
+                let xdg_id = window.xdg_app_id();
+                let id = xdg_id.as_ref().or(window.app_id.as_ref());
+                let title = window.title();
+
+                if app_id.matches(id) {
+                    return Some(LayoutPosition::new(i, true));
+                }
+                
+                // Fallback: Check title
+                if let Some(t) = &title {
+                    if app_id.matches(Some(t)) {
                         return Some(LayoutPosition::new(i, true));
                     }
                 }
@@ -186,7 +209,80 @@ impl Windows {
             self.layouts.set_active(&self.output, Some(position), true);
             true
         } else {
+            info!("focus_app: No matching window found.");
             false
+        }
+    }
+
+    /// Toggle application visibility: focus if hidden/inactive, switch to previous if active.
+    pub fn toggle_app(&mut self, app_id: AppIdMatcher) -> bool {
+        // Check if the app is currently active
+        // We check both title and app_id because sometimes the matcher is against title
+        let (title, current_id) = self.active_window_info().unwrap_or(("None".to_string(), "None".to_string()));
+        
+        let is_active = app_id.matches(Some(&current_id)) || app_id.matches(Some(&title));
+        
+        info!("toggle_app: Request={:?}, ActiveTitle='{}', ActiveID='{}', IsActive={}", app_id, title, current_id, is_active);
+
+        if is_active {
+            // If active, we want to "hide" it. 
+            info!("toggle_app: Hiding app. Layout count: {}", self.layouts.len());
+            for (i, l) in self.layouts.layouts().iter().enumerate() {
+                 let p = l.primary().map(|w| w.borrow().title().unwrap_or_default()).unwrap_or("None".into());
+                 let s = l.secondary().map(|w| w.borrow().title().unwrap_or_default()).unwrap_or("None".into());
+                 info!("  Layout {}: Primary='{}', Secondary='{}'", i, p, s);
+            }
+            
+            // If we are in a fullscreen view of this app, leave fullscreen.
+            if let View::Fullscreen(window) = &self.view {
+                let window = window.borrow();
+                let xdg_id = window.xdg_app_id();
+                let id = xdg_id.as_ref().or(window.app_id.as_ref());
+                let title = window.title();
+                
+                // Match against ID or Title
+                if app_id.matches(id) || (title.is_some() && app_id.matches(title.as_ref())) {
+                    drop(window);
+                    self.set_view(View::Workspace);
+                    self.resize_visible();
+                }
+            }
+
+            // If we are in workspace view, switch to the previous layout.
+            // Try to find JollyPad-Desktop explicitly to ensure we return home.
+            let desktop_index = self.layouts.layouts().iter().position(|l| {
+                if let Some(p) = l.primary() {
+                    let w = p.borrow();
+                    let t = w.title().unwrap_or_default();
+                    let xdg_id = w.xdg_app_id().unwrap_or_default();
+                    let app_id = w.app_id.clone().unwrap_or_default();
+                    
+                    info!("toggle_app check: checking layout primary title='{}', xdg_id='{}', app_id='{}'", t, xdg_id, app_id);
+                    
+                    t.contains("JollyPad-Desktop") || 
+                    xdg_id.contains("jolly-home") || 
+                    app_id.contains("jolly-home")
+                } else {
+                    false
+                }
+            });
+
+            if let Some(index) = desktop_index {
+                 info!("toggle_app: Switching explicitly to Desktop at index {}", index);
+                 self.layouts.set_active(&self.output, Some(LayoutPosition::new(index, false)), true);
+            } else if self.layouts.len() <= 1 {
+                self.layouts.set_active(&self.output, None, true);
+            } else {
+                // Fallback: If we can't find desktop, and we have multiple layouts, 
+                // defaulting to Layout 0 is safer than cycling blindly if cycling fails.
+                info!("toggle_app: Desktop not found, forcing switch to Layout 0");
+                self.layouts.set_active(&self.output, Some(LayoutPosition::new(0, false)), true);
+            }
+             true
+
+        } else {
+            // If not active, focus it.
+            self.focus_app(app_id)
         }
     }
 

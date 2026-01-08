@@ -987,7 +987,7 @@ impl Catacomb {
                 data.is_some_and(|data| data.inhibits_shortcuts)
             })
         });
-        if inhibits_shortcuts {
+        if inhibits_shortcuts && key != Keysym::BtnMode {
             return FilterResult::Forward;
         }
 
