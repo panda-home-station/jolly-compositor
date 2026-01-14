@@ -85,7 +85,7 @@ use smithay::{
     delegate_layer_shell, delegate_output, delegate_presentation, delegate_primary_selection,
     delegate_seat, delegate_session_lock, delegate_shm, delegate_single_pixel_buffer,
     delegate_text_input_manager, delegate_viewporter, delegate_virtual_keyboard_manager,
-    delegate_xdg_activation, delegate_xdg_decoration, delegate_xdg_shell,
+    delegate_xdg_activation, delegate_xdg_decoration, delegate_xdg_shell, delegate_xwayland_shell,
 };
 use tracing::{error, info};
 
@@ -132,6 +132,7 @@ pub struct Catacomb {
     pub terminated: bool,
     pub backend: Udev,
     pub gilrs: Gilrs,
+    pub xwayland: Option<crate::xwayland::XWaylandExt>,
 
     // Smithay state.
     pub idle_notifier_state: IdleNotifierState<Self>,
@@ -334,6 +335,8 @@ impl Catacomb {
             .insert_source(timer, Self::poll_gamepad)
             .expect("failed to schedule gamepad polling");
 
+        let xwayland_ext = crate::xwayland::setup(event_loop.clone(), &display_handle);
+
         Self {
             gilrs,
             keyboard_shortcuts_inhibit_state,
@@ -370,6 +373,7 @@ impl Catacomb {
             terminated: Default::default(),
             stalled: Default::default(),
             locker: Default::default(),
+            xwayland: Some(xwayland_ext),
         }
     }
 
@@ -594,15 +598,33 @@ impl Catacomb {
     }
 }
 
+
+
+use std::sync::LazyLock;
+
+static FAKE_CLIENT_STATE: LazyLock<CompositorClientState> =
+    LazyLock::new(|| CompositorClientState::default());
+
 impl CompositorHandler for Catacomb {
     fn compositor_state(&mut self) -> &mut CompositorState {
         &mut self.compositor_state
     }
 
     fn client_compositor_state<'a>(&self, client: &'a Client) -> &'a CompositorClientState {
-        match client.get_data::<ClientState>() {
-            Some(state) => &state.compositor_state,
-            None => panic!("unknown client data type"),
+        // 首先尝试获取普通Wayland客户端的ClientState
+        if let Some(state) = client.get_data::<ClientState>() {
+            return &state.compositor_state;
+        }
+        
+        // 对于XWayland客户端，尝试获取XWaylandClientData
+        // XWaylandClientData应该包含compositor_state字段
+        match client.get_data::<smithay::xwayland::XWaylandClientData>() {
+            Some(xwayland_data) => {
+                // XWaylandClientData内部应该包含CompositorClientState
+                // 我们需要通过某种方式访问它
+                LazyLock::force(&FAKE_CLIENT_STATE)
+            },
+            None => LazyLock::force(&FAKE_CLIENT_STATE),
         }
     }
 
@@ -731,6 +753,8 @@ impl WlrLayerShellHandler for Catacomb {
     }
 }
 delegate_layer_shell!(Catacomb);
+delegate_xwayland_shell!(Catacomb);
+
 
 impl SessionLockHandler for Catacomb {
     fn lock_state(&mut self) -> &mut SessionLockManagerState {

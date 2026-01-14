@@ -26,6 +26,7 @@ mod protocols;
 mod socket;
 mod udev;
 mod windows;
+mod xwayland;
 
 /// Command line arguments.
 #[derive(Parser, Debug)]

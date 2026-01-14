@@ -23,6 +23,7 @@ use smithay::wayland::compositor;
 use smithay::wayland::session_lock::LockSurface;
 use smithay::wayland::shell::wlr_layer::{Layer, LayerSurface};
 use smithay::wayland::shell::xdg::{PopupSurface, ToplevelSurface};
+use crate::xwayland::X11Surface;
 
 use crate::catacomb::Catacomb;
 use crate::drawing::{CatacombElement, Graphics};
@@ -32,7 +33,7 @@ use crate::orientation::Orientation;
 use crate::output::{Canvas, GESTURE_HANDLE_HEIGHT, Output};
 use crate::overview::{DragActionType, DragAndDrop, Overview};
 use crate::windows::layout::{LayoutPosition, Layouts};
-use crate::windows::surface::{CatacombLayerSurface, InputSurface, InputSurfaceKind, Surface};
+use crate::windows::surface::{CatacombLayerSurface, InputSurface, InputSurfaceKind, Surface, ShellSurface};
 use crate::windows::window::Window;
 
 pub mod layout;
@@ -107,7 +108,7 @@ pub struct Windows {
     view: View,
 
     event_loop: LoopHandle<'static, Catacomb>,
-    activated: Option<ToplevelSurface>,
+    activated: Option<ShellSurface>,
     transaction: Option<Transaction>,
     textures: Vec<CatacombElement>,
     start_time: Instant,
@@ -363,6 +364,8 @@ impl Windows {
             state.decoration_mode = Some(DecorationMode::ServerSide);
         });
 
+        let surface = ShellSurface::Xdg(surface);
+
         let transform = self.output.orientation().surface_transform();
         let scale = self.output.scale();
 
@@ -381,6 +384,23 @@ impl Windows {
             // For overlay, ensure we stay in Workspace mode so we can see underlay
             self.view = View::Workspace;
         }
+    }
+
+    /// Add a new X11 window.
+    pub fn add_x11(&mut self, surface: X11Surface) {
+        let surface = ShellSurface::X11(surface);
+
+        let transform = self.output.orientation().surface_transform();
+        let scale = self.output.scale();
+
+        let window = Rc::new(RefCell::new(Window::new(surface, scale, transform, None)));
+        self.layouts.create(&self.output, window.clone());
+
+        // Auto-focus the new window
+        self.layouts.focus = Some(Rc::downgrade(&window));
+
+        // Switch view to Fullscreen immediately
+        self.view = View::Fullscreen(window.clone());
     }
 
     /// Add a new layer shell window.
@@ -448,7 +468,7 @@ impl Windows {
             wl_surface = Cow::Owned(surface);
         }
 
-        self.layouts.windows_mut().find(|window| window.surface().eq(wl_surface.as_ref()))
+        self.layouts.windows_mut().find(|window| window.surface() == *wl_surface.as_ref())
     }
 
     /// Handle a surface commit for any window.
@@ -461,13 +481,13 @@ impl Windows {
 
         // Find a window matching the root surface.
         macro_rules! find_window {
-            ($windows:expr) => {{ $windows.find(|window| window.surface().eq(root_surface.as_ref())) }};
+            ($windows:expr) => {{ $windows.find(|window| window.surface() == *root_surface.as_ref()) }};
         }
 
         // Handle session lock surface commits.
         let scale = self.output.scale();
         if let View::Lock(Some(window)) = self.pending_view_mut() {
-            if window.surface() == root_surface.as_ref() {
+            if window.surface() == *root_surface.as_ref() {
                 window.surface_commit_common(scale, &[], surface);
                 return;
             }
@@ -521,10 +541,10 @@ impl Windows {
     ///
     /// Popups will be dismissed if a surface commit is made for them without
     /// any parent set. They will also be dismissed if the parent is not
-    /// currently visible.
+    /// Handle orphan popup surface commits.
     pub fn orphan_surface_commit(&mut self, root_surface: &WlSurface) -> Option<()> {
         let mut orphans = self.orphan_popups.iter();
-        let index = orphans.position(|popup| popup.surface() == root_surface)?;
+        let index = orphans.position(|popup| popup.surface() == *root_surface)?;
         let mut popup = self.orphan_popups.swap_remove(index);
         let parent = popup.parent()?;
 
@@ -737,7 +757,7 @@ impl Windows {
         self.unfullscreen(surface);
 
         // Reap layout windows.
-        self.layouts.reap(&self.output, surface);
+        self.layouts.reap(&self.output, &ShellSurface::Xdg(surface.clone()));
     }
 
     /// Stage dead layer shell window for reaping.
@@ -783,11 +803,9 @@ impl Windows {
 
     /// Fullscreen the supplied XDG surface.
     pub fn fullscreen(&mut self, surface: &ToplevelSurface) {
-        if let Some(window) = self.layouts.find_window(surface.surface()) {
+        if let Some(window) = self.layouts.find_window(&surface.surface()) {
             // Update window's XDG state.
-            window.borrow_mut().surface.set_state(|state| {
-                state.states.set(State::Fullscreen);
-            });
+            window.borrow_mut().surface.set_fullscreen(true);
 
             // Resize windows and change view.
             self.set_view(View::Fullscreen(window.clone()));
@@ -807,11 +825,16 @@ impl Windows {
             _ => return,
         };
 
-        if surface.is_none_or(|surface| surface == &window.surface) {
+        // We can't easily check equality if surface is ToplevelSurface and window.surface is ShellSurface.
+        // We need to extract ToplevelSurface from ShellSurface or compare WlSurface.
+        let match_found = match surface {
+            Some(s) => window.surface.surface() == s.surface(),
+            None => true,
+        };
+
+        if match_found {
             // Update window's XDG state.
-            window.surface.set_state(|state| {
-                state.states.unset(State::Fullscreen);
-            });
+            window.surface.set_fullscreen(false);
             drop(window);
 
             // Resize windows and change view.
@@ -858,15 +881,15 @@ impl Windows {
         if self.activated.as_ref() != focused.as_ref().map(|(surface, _)| surface) {
             // Clear old activated flag.
             if let Some(activated) = self.activated.take() {
-                activated.set_state(|state| {
-                    state.states.unset(State::Activated);
+                activated.set_state(|_state| {
+                    activated.set_activated(false);
                 });
             }
 
             // Set new activated flag.
             if let Some((surface, _)) = &focused {
-                surface.set_state(|state| {
-                    state.states.set(State::Activated);
+                surface.set_state(|_state| {
+                    surface.set_activated(true);
                 });
             }
             self.activated = focused.as_ref().map(|(surface, _)| surface.clone());
@@ -1016,7 +1039,7 @@ impl Windows {
         // Resize XDG clients.
         for layout in self.layouts.layouts() {
             // Skip resizing fullscreened layout.
-            if layout.windows().any(|window| Some(window.borrow().surface()) == fullscreen_window) {
+            if layout.windows().any(|window| Some(window.borrow().surface()) == fullscreen_window.cloned()) {
                 continue;
             }
 
@@ -1352,8 +1375,8 @@ impl Windows {
                 }
 
                 // Unset XDG fullscreen state.
-                window.borrow().surface.set_state(|state| {
-                    state.states.unset(State::Fullscreen);
+                window.borrow().surface.set_state(|_state| {
+                    window.borrow().surface.set_fullscreen(false);
                 });
 
                 // Change back to workspace view.

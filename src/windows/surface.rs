@@ -5,8 +5,11 @@ use std::ops::Deref;
 use std::rc::Weak;
 use std::sync::Mutex;
 
+use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Point, Rectangle, Size};
+
+use crate::drawing::CatacombSurfaceData;
 use smithay::wayland::compositor;
 use smithay::wayland::session_lock::{LockSurface, LockSurfaceState};
 use smithay::wayland::shell::wlr_layer::{
@@ -16,6 +19,7 @@ use smithay::wayland::shell::xdg::{
     PopupState, PopupSurface, SurfaceCachedState, ToplevelState, ToplevelSurface,
     XdgPopupSurfaceData, XdgToplevelSurfaceData, XdgToplevelSurfaceRoleAttributes,
 };
+use crate::xwayland::X11Surface;
 
 use crate::windows::Window;
 
@@ -25,7 +29,7 @@ pub trait Surface {
     type State;
 
     /// Get underlying Wayland surface.
-    fn surface(&self) -> &WlSurface;
+    fn surface(&self) -> WlSurface;
 
     /// Check if the window has been closed.
     fn alive(&self) -> bool;
@@ -47,17 +51,158 @@ pub trait Surface {
 
     /// Geometry of the window's visible bounds.
     fn geometry(&self) -> Option<Rectangle<i32, Logical>> {
-        compositor::with_states(self.surface(), |states| {
+        compositor::with_states(&self.surface(), |states| {
             states.cached_state.get::<SurfaceCachedState>().current().geometry
         })
+    }
+
+    /// Set fullscreen state.
+    fn set_fullscreen(&self, _fullscreen: bool) {}
+
+    /// Set activated state.
+    fn set_activated(&self, _activated: bool) {}
+
+    /// Send close request.
+    fn send_close(&self) {}
+
+    /// Get surface title.
+    fn title(&self) -> Option<String> { None }
+
+    /// Get surface App ID.
+    fn app_id(&self) -> Option<String> { None }
+
+    /// Get preferred fractional scale.
+    fn preferred_fractional_scale(&self) -> Option<f64> {
+        compositor::with_states(&self.surface(), |states| {
+            states
+                .data_map
+                .get::<RefCell<CatacombSurfaceData>>()
+                .and_then(|s| Some(s.borrow().preferred_fractional_scale))
+        })
+    }
+
+    /// Get buffer scale.
+    fn buffer_scale(&self) -> i32 {
+        compositor::with_states(&self.surface(), |states| {
+            let surface_data = states.data_map.get::<RefCell<CatacombSurfaceData>>();
+            if let Some(surface_data) = surface_data {
+                surface_data.borrow().buffer_size.w
+            } else {
+                1
+            }
+        })
+    }
+}
+
+/// A wrapper for different shell surfaces.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ShellSurface {
+    Xdg(ToplevelSurface),
+    X11(X11Surface),
+}
+
+impl Surface for ShellSurface {
+    type State = ();
+
+    fn surface(&self) -> WlSurface {
+        match self {
+            ShellSurface::Xdg(s) => s.surface(),
+            ShellSurface::X11(s) => s.wl_surface().unwrap(),
+        }
+    }
+
+    fn alive(&self) -> bool {
+        match self {
+            ShellSurface::Xdg(s) => s.alive(),
+            ShellSurface::X11(s) => s.alive(),
+        }
+    }
+
+    fn initial_configure(&self) {
+        match self {
+            ShellSurface::Xdg(s) => s.initial_configure(),
+            ShellSurface::X11(_) => {},
+        }
+    }
+
+    fn initial_configure_sent(&self) -> bool {
+        match self {
+            ShellSurface::Xdg(s) => s.initial_configure_sent(),
+            ShellSurface::X11(_) => true,
+        }
+    }
+
+    fn set_state<F: FnMut(&mut Self::State)>(&self, _f: F) {
+        // No-op for ShellSurface wrapper, use specific methods
+    }
+
+    fn resize(&self, size: Size<i32, Logical>) {
+        match self {
+            ShellSurface::Xdg(s) => s.resize(size),
+            ShellSurface::X11(s) => {
+                let rect = Rectangle::from_size(size);
+                s.configure(rect).ok();
+            },
+        }
+    }
+
+    fn acked_size(&self) -> Size<i32, Logical> {
+        match self {
+            ShellSurface::Xdg(s) => s.acked_size(),
+            ShellSurface::X11(s) => {
+                 s.geometry().size
+            },
+        }
+    }
+    
+    fn geometry(&self) -> Option<Rectangle<i32, Logical>> {
+         match self {
+            ShellSurface::Xdg(s) => s.geometry(),
+            ShellSurface::X11(s) => Some(s.geometry()),
+        }
+    }
+
+    fn set_fullscreen(&self, fullscreen: bool) {
+        match self {
+            ShellSurface::Xdg(s) => s.set_fullscreen(fullscreen),
+            ShellSurface::X11(s) => { s.set_fullscreen(fullscreen).ok(); },
+        }
+    }
+
+    fn set_activated(&self, activated: bool) {
+        match self {
+            ShellSurface::Xdg(s) => s.set_activated(activated),
+            ShellSurface::X11(s) => { s.set_activated(activated).ok(); },
+        }
+    }
+
+    fn send_close(&self) {
+        match self {
+            ShellSurface::Xdg(s) => s.send_close(),
+            ShellSurface::X11(s) => { s.close().ok(); },
+        }
+    }
+
+    fn title(&self) -> Option<String> {
+        match self {
+            ShellSurface::Xdg(s) => s.title(),
+            ShellSurface::X11(s) => Some(s.title()),
+        }
+    }
+
+    fn app_id(&self) -> Option<String> {
+        match self {
+            ShellSurface::Xdg(s) => s.app_id(),
+            ShellSurface::X11(s) => Some(s.class()),
+        }
     }
 }
 
 impl Surface for ToplevelSurface {
     type State = ToplevelState;
 
-    fn surface(&self) -> &WlSurface {
-        self.wl_surface()
+    fn surface(&self) -> WlSurface {
+        self.wl_surface().clone()
     }
 
     fn alive(&self) -> bool {
@@ -71,7 +216,7 @@ impl Surface for ToplevelSurface {
     }
 
     fn initial_configure_sent(&self) -> bool {
-        compositor::with_states(self.surface(), |states| {
+        compositor::with_states(&self.surface(), |states| {
             let surface_data = states.data_map.get::<XdgToplevelSurfaceData>().unwrap();
             surface_data.lock().unwrap().initial_configure_sent
         })
@@ -93,7 +238,7 @@ impl Surface for ToplevelSurface {
     }
 
     fn acked_size(&self) -> Size<i32, Logical> {
-        compositor::with_states(self.surface(), |states| {
+        compositor::with_states(&self.surface(), |states| {
             let attributes = states
                 .data_map
                 .get::<Mutex<XdgToplevelSurfaceRoleAttributes>>()
@@ -103,13 +248,61 @@ impl Surface for ToplevelSurface {
         })
         .unwrap_or_default()
     }
+
+    fn set_fullscreen(&self, fullscreen: bool) {
+        self.with_pending_state(|state| {
+            if fullscreen {
+                state.states.set(State::Fullscreen);
+            } else {
+                state.states.unset(State::Fullscreen);
+            }
+        });
+        if self.initial_configure_sent() {
+             self.send_configure();
+        }
+    }
+
+    fn set_activated(&self, activated: bool) {
+        self.with_pending_state(|state| {
+            if activated {
+                state.states.set(State::Activated);
+            } else {
+                state.states.unset(State::Activated);
+            }
+        });
+        if self.initial_configure_sent() {
+             self.send_configure();
+        }
+    }
+
+    fn title(&self) -> Option<String> {
+        compositor::with_states(&self.surface(), |states| {
+            states
+                .data_map
+                .get::<Mutex<XdgToplevelSurfaceRoleAttributes>>()
+                .and_then(|attributes| attributes.lock().ok())
+                .map(|attrs| attrs.title.clone())
+        })
+        .flatten()
+    }
+
+    fn app_id(&self) -> Option<String> {
+        compositor::with_states(&self.surface(), |states| {
+            states
+                .data_map
+                .get::<Mutex<XdgToplevelSurfaceRoleAttributes>>()
+                .and_then(|attributes| attributes.lock().ok())
+                .map(|attrs| attrs.app_id.clone())
+        })
+        .flatten()
+    }
 }
 
 impl Surface for PopupSurface {
     type State = PopupState;
 
-    fn surface(&self) -> &WlSurface {
-        self.wl_surface()
+    fn surface(&self) -> WlSurface {
+        self.wl_surface().clone()
     }
 
     fn alive(&self) -> bool {
@@ -125,7 +318,7 @@ impl Surface for PopupSurface {
     }
 
     fn initial_configure_sent(&self) -> bool {
-        compositor::with_states(self.surface(), |states| {
+        compositor::with_states(&self.surface(), |states| {
             let surface_data = states.data_map.get::<XdgPopupSurfaceData>().unwrap();
             surface_data.lock().unwrap().initial_configure_sent
         })
@@ -168,8 +361,8 @@ impl CatacombLayerSurface {
 impl Surface for CatacombLayerSurface {
     type State = LayerSurfaceState;
 
-    fn surface(&self) -> &WlSurface {
-        self.surface.wl_surface()
+    fn surface(&self) -> WlSurface {
+        self.surface.wl_surface().clone()
     }
 
     fn alive(&self) -> bool {
@@ -185,7 +378,7 @@ impl Surface for CatacombLayerSurface {
     }
 
     fn initial_configure_sent(&self) -> bool {
-        compositor::with_states(self.surface(), |states| {
+        compositor::with_states(&self.surface(), |states| {
             let surface_data = states.data_map.get::<Mutex<LayerSurfaceAttributes>>().unwrap();
             surface_data.lock().unwrap().initial_configure_sent
         })
@@ -207,7 +400,7 @@ impl Surface for CatacombLayerSurface {
     }
 
     fn acked_size(&self) -> Size<i32, Logical> {
-        compositor::with_states(self.surface(), |states| {
+        compositor::with_states(&self.surface(), |states| {
             let attributes = states
                 .data_map
                 .get::<Mutex<LayerSurfaceAttributes>>()
@@ -234,8 +427,8 @@ impl Deref for CatacombLayerSurface {
 impl Surface for LockSurface {
     type State = LockSurfaceState;
 
-    fn surface(&self) -> &WlSurface {
-        self.wl_surface()
+    fn surface(&self) -> WlSurface {
+        self.wl_surface().clone()
     }
 
     fn alive(&self) -> bool {

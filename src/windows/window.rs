@@ -29,7 +29,7 @@ use smithay::wayland::shell::wlr_layer::{
     Anchor, ExclusiveZone, KeyboardInteractivity, Layer, LayerSurfaceCachedState,
 };
 use smithay::wayland::shell::xdg::{
-    PopupSurface, PositionerState, ToplevelSurface, XdgPopupSurfaceRoleAttributes,
+    PopupSurface, PositionerState, XdgPopupSurfaceRoleAttributes,
     XdgToplevelSurfaceRoleAttributes,
 };
 use smithay::wayland::{fractional_scale, single_pixel_buffer};
@@ -39,11 +39,11 @@ use crate::drawing::{CatacombElement, CatacombSurfaceData, RenderTexture, Textur
 use crate::geometry::Vector;
 use crate::output::{ExclusiveSpace, Output};
 use crate::windows;
-use crate::windows::surface::{CatacombLayerSurface, InputSurface, Surface};
+use crate::windows::surface::{CatacombLayerSurface, InputSurface, ShellSurface, Surface};
 
 /// Wayland client window state.
 #[derive(Debug)]
-pub struct Window<S = ToplevelSurface> {
+pub struct Window<S = ShellSurface> {
     /// Last configure size acked by the client.
     pub acked_size: Size<i32, Logical>,
 
@@ -147,26 +147,12 @@ impl<S: Surface + 'static> Window<S> {
 
     /// Get the window title.
     pub fn title(&self) -> Option<String> {
-        compositor::with_states(self.surface.surface(), |states| {
-            states
-                .data_map
-                .get::<Mutex<XdgToplevelSurfaceRoleAttributes>>()
-                .and_then(|attributes| attributes.lock().ok())
-                .map(|attrs| attrs.title.clone())
-        })
-        .flatten()
+        self.surface.title()
     }
 
     /// Get the window app_id from XDG attributes.
     pub fn xdg_app_id(&self) -> Option<String> {
-        compositor::with_states(self.surface.surface(), |states| {
-            states
-                .data_map
-                .get::<Mutex<XdgToplevelSurfaceRoleAttributes>>()
-                .and_then(|attributes| attributes.lock().ok())
-                .map(|attrs| attrs.app_id.clone())
-        })
-        .flatten()
+        self.surface.app_id()
     }
 
     /// Check window liveliness.
@@ -279,7 +265,7 @@ impl<S: Surface + 'static> Window<S> {
         self.texture_cache.reset(self.size, geometry.map(|geometry| geometry.size));
 
         compositor::with_surface_tree_upward(
-            self.surface.surface(),
+            &self.surface.surface(),
             Point::from((0, 0)) - geometry.unwrap_or_default().loc,
             |_, surface_data, location| {
                 let mut data = match surface_data.data_map.get::<RefCell<CatacombSurfaceData>>() {
@@ -461,7 +447,7 @@ impl<S: Surface + 'static> Window<S> {
     /// Execute a function for all surfaces of this window.
     fn with_surfaces<F: FnMut(&WlSurface, &SurfaceData)>(&self, mut fun: F) {
         compositor::with_surface_tree_upward(
-            self.surface.surface(),
+            &self.surface.surface(),
             (),
             |_, _, _| TraversalAction::DoChildren(()),
             |surface, surface_data, _| fun(surface, surface_data),
@@ -643,7 +629,7 @@ impl<S: Surface + 'static> Window<S> {
         let surface = self.surface.surface();
 
         // Update fractional scale protocol.
-        compositor::with_states(surface, |states| {
+        compositor::with_states(&surface, |states| {
             // Cache scale on surface in case fractional scale isn't initialized yet.
             let surface_data =
                 states.data_map.get_or_insert(|| RefCell::new(CatacombSurfaceData::new()));
@@ -702,7 +688,7 @@ impl<S: Surface + 'static> Window<S> {
 
         let result = RefCell::new(None);
         compositor::with_surface_tree_downward(
-            self.surface.surface(),
+            &self.surface.surface(),
             bounds_loc,
             |_, surface_data, location| {
                 // Skip processing if surface was already found.
@@ -776,7 +762,7 @@ impl<S: Surface + 'static> Window<S> {
         mut popup: Window<PopupSurface>,
         parent: &WlSurface,
     ) -> Option<Window<PopupSurface>> {
-        if self.surface.surface() == parent {
+        if self.surface.surface() == *parent {
             // Inherit parent properties.
             popup.app_id.clone_from(&self.app_id);
             popup.visible = self.visible;
@@ -805,7 +791,7 @@ impl<S: Surface + 'static> Window<S> {
         let window_size = self.bounds(output_scale).size.scale(output_scale / window_scale);
 
         self.popups.iter_mut().any(|popup| {
-            if popup.surface.surface() == root_surface {
+            if popup.surface.surface() == *root_surface {
                 // Calculate popup position and convert it to output scale.
                 let popup_loc = popup.constrained_location(window_size);
                 popup.output_rectangle.loc = popup_loc.scale(window_scale / output_scale);
@@ -881,7 +867,7 @@ impl<S: Surface + 'static> Window<S> {
     }
 
     /// Get primary window surface.
-    pub fn surface(&self) -> &WlSurface {
+    pub fn surface(&self) -> WlSurface {
         self.surface.surface()
     }
 }
@@ -897,7 +883,7 @@ impl Window {
 impl Window<PopupSurface> {
     /// Get the parent of this popup.
     pub fn parent(&self) -> Option<WlSurface> {
-        compositor::with_states(self.surface.surface(), |states| {
+        compositor::with_states(&self.surface.surface(), |states| {
             let attributes = states.data_map.get::<Mutex<XdgPopupSurfaceRoleAttributes>>()?;
             attributes.lock().ok()?.parent.clone()
         })
@@ -930,7 +916,7 @@ impl Window<CatacombLayerSurface> {
 
     /// Recompute the window's size and location.
     pub fn update_dimensions(&mut self, output: &mut Output, fullscreen_active: bool) {
-        let state = compositor::with_states(self.surface.surface(), |states| {
+        let state = compositor::with_states(&self.surface.surface(), |states| {
             *states.cached_state.get::<LayerSurfaceCachedState>().current()
         });
 
@@ -986,7 +972,7 @@ impl Window<CatacombLayerSurface> {
 
     /// Update layer-specific shell properties.
     fn update_layer_state(&mut self, output: &mut Output) {
-        let state = compositor::with_states(self.surface.surface(), |states| {
+        let state = compositor::with_states(&self.surface.surface(), |states| {
             *states.cached_state.get::<LayerSurfaceCachedState>().current()
         });
 

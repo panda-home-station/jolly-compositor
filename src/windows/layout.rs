@@ -7,9 +7,10 @@ use std::rc::{Rc, Weak};
 use std::sync::atomic::{self, AtomicU64};
 
 use tracing::info;
+use crate::windows::surface::ShellSurface;
 
 use smithay::utils::{Logical, Point};
-use smithay::wayland::shell::xdg::ToplevelSurface;
+
 
 use crate::drawing::CatacombElement;
 use crate::windows::surface::InputSurfaceKind;
@@ -284,7 +285,7 @@ impl Layouts {
     }
 
     /// Stage a dead window for reaping.
-    pub fn reap(&self, output: &Output, surface: &ToplevelSurface) {
+    pub fn reap(&self, output: &Output, surface: &ShellSurface) {
         // Ensure window is reaped even if no resize is required.
         windows::start_transaction();
 
@@ -567,7 +568,7 @@ impl Layouts {
         self.layouts
             .iter()
             .flat_map(|layout| layout.windows())
-            .find(|window| window.borrow().surface() == surface)
+            .find(|window| window.borrow().surface() == *surface)
     }
 
     /// Touch and return surface at the specified location.
