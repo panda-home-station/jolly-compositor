@@ -187,11 +187,9 @@ impl<S: Surface + 'static> Window<S> {
         let window_scale = window_scale.into().unwrap_or(1.);
 
         // Calculate window bounds only for the toplevel window.
-        let bounds = bounds.into().unwrap_or_else(|| {
-            let mut bounds = self.bounds(output_scale).to_physical_precise_round(output_scale);
-            bounds.loc = location.to_physical_precise_round(output_scale);
-            bounds
-        });
+        let bounds = bounds
+            .into()
+            .unwrap_or_else(|| self.bounds(output_scale).to_physical_precise_round(output_scale));
 
         // Add popup textures.
         for popup in self.popups.iter().rev() {
@@ -1054,7 +1052,7 @@ impl TextureCache {
         origin.y = origin.y.min(location.y);
 
         // Update the combined texture size.
-        let max_size = texture.size() + location.to_size();
+        let max_size = texture.size() + location.to_size_abs();
         self.texture_size = self.texture_size.max(max_size);
 
         self.textures.push(texture);

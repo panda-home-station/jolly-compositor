@@ -372,7 +372,15 @@ impl CatacombElement {
         output_scale: f64,
     ) {
         let window_scale = window_scale.into().unwrap_or(1.);
-        let location = location.into();
+        let mut location = location.into();
+        let scale = Scale::from(output_scale);
+        let tex_loc = texture.geometry(scale).loc;
+        let mut combined = tex_loc + location;
+        let rel_x = (combined.x - bounds.loc.x).clamp(0, bounds.size.w);
+        let rel_y = (combined.y - bounds.loc.y).clamp(0, bounds.size.h);
+        combined.x = bounds.loc.x + rel_x;
+        combined.y = bounds.loc.y + rel_y;
+        location = combined - tex_loc;
 
         let rescaled_element =
             RescaleRenderElement::from_element(texture, (0, 0).into(), window_scale);

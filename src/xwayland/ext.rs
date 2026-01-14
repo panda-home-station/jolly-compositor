@@ -4,11 +4,16 @@ use smithay::wayland::xwayland_shell::XWaylandShellState;
 use smithay::xwayland::{X11Wm, XWayland, XWaylandEvent};
 
 use crate::catacomb::Catacomb;
+use crate::daemon;
+use std::env;
+use std::collections::HashMap;
+use smithay::utils::{Logical, Rectangle};
 
 pub struct XWaylandExt {
     pub shell_state: XWaylandShellState,
     pub wm: Option<X11Wm>,
     pub display_number: Option<u32>,
+    pub pending_configs: HashMap<u32, Rectangle<i32, Logical>>,
 }
 
 pub fn setup(event_loop: LoopHandle<'static, Catacomb>, display_handle: &DisplayHandle) -> XWaylandExt {
@@ -30,6 +35,36 @@ pub fn setup(event_loop: LoopHandle<'static, Catacomb>, display_handle: &Display
                 let wm = X11Wm::start_wm(catacomb.event_loop.clone(), x11_socket, xwayland_client_for_wm.clone())
                     .expect("Failed to attach X11 Window Manager");
                 if let Some(ext) = catacomb.xwayland.as_mut() {
+                    let disp = format!(":{}", display_number);
+                    unsafe { env::set_var("DISPLAY", &disp) };
+
+                    let _ = daemon(
+                        String::from("dbus-update-activation-environment"),
+                        vec![String::from("--systemd"), String::from("DISPLAY")],
+                    );
+                    let _ = daemon(
+                        String::from("systemctl"),
+                        vec![
+                            String::from("--user"),
+                            String::from("set-environment"),
+                            format!("DISPLAY={}", disp),
+                        ],
+                    );
+                    if let Ok(wldisp) = env::var("WAYLAND_DISPLAY") {
+                        let _ = daemon(
+                            String::from("dbus-update-activation-environment"),
+                            vec![String::from("--systemd"), String::from("WAYLAND_DISPLAY")],
+                        );
+                        let _ = daemon(
+                            String::from("systemctl"),
+                            vec![
+                                String::from("--user"),
+                                String::from("set-environment"),
+                                format!("WAYLAND_DISPLAY={}", wldisp),
+                            ],
+                        );
+                    }
+
                     ext.display_number = Some(display_number);
                     ext.wm = Some(wm);
                 }
@@ -40,5 +75,5 @@ pub fn setup(event_loop: LoopHandle<'static, Catacomb>, display_handle: &Display
 
     let shell_state = XWaylandShellState::new::<Catacomb>(display_handle);
 
-    XWaylandExt { shell_state, wm: None, display_number: None }
+    XWaylandExt { shell_state, wm: None, display_number: None, pending_configs: HashMap::new() }
 }
