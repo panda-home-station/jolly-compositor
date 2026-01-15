@@ -468,7 +468,9 @@ impl Windows {
             wl_surface = Cow::Owned(surface);
         }
 
-        self.layouts.windows_mut().find(|window| window.surface() == *wl_surface.as_ref())
+        self.layouts
+            .windows_mut()
+            .find(|window| window.surface.maybe_surface().map_or(false, |root| root == *wl_surface.as_ref()))
     }
 
     /// Handle a surface commit for any window.
@@ -481,7 +483,14 @@ impl Windows {
 
         // Find a window matching the root surface.
         macro_rules! find_window {
-            ($windows:expr) => {{ $windows.find(|window| window.surface() == *root_surface.as_ref()) }};
+            ($windows:expr) => {{
+                $windows.find(|window| {
+                    window
+                        .surface
+                        .maybe_surface()
+                        .map_or(false, |root| root == *root_surface.as_ref())
+                })
+            }};
         }
 
         // Handle session lock surface commits.
@@ -828,7 +837,7 @@ impl Windows {
         // We can't easily check equality if surface is ToplevelSurface and window.surface is ShellSurface.
         // We need to extract ToplevelSurface from ShellSurface or compare WlSurface.
         let match_found = match surface {
-            Some(s) => window.surface.surface() == s.surface(),
+            Some(s) => window.surface.maybe_surface().is_some_and(|wl| wl == s.surface()),
             None => true,
         };
 
@@ -895,7 +904,7 @@ impl Windows {
             self.activated = focused.as_ref().map(|(surface, _)| surface.clone());
         }
 
-        focused.map(|(surface, app_id)| (surface.surface().clone(), app_id))
+        focused.and_then(|(surface, app_id)| surface.maybe_surface().map(|wl| (wl, app_id)))
             // Check for layer-shell window focus.
             .or_else(|| self.layers.focus.clone())
     }

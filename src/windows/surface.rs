@@ -31,6 +31,14 @@ pub trait Surface {
     /// Get underlying Wayland surface.
     fn surface(&self) -> WlSurface;
 
+    /// Get underlying Wayland surface if available.
+    ///
+    /// For X11 surfaces, the associated wl_surface may not be available immediately.
+    /// This method allows callers to gracefully skip operations until it exists.
+    fn maybe_surface(&self) -> Option<WlSurface> {
+        Some(self.surface())
+    }
+
     /// Check if the window has been closed.
     fn alive(&self) -> bool;
 
@@ -51,7 +59,8 @@ pub trait Surface {
 
     /// Geometry of the window's visible bounds.
     fn geometry(&self) -> Option<Rectangle<i32, Logical>> {
-        compositor::with_states(&self.surface(), |states| {
+        let Some(surface) = self.maybe_surface() else { return None };
+        compositor::with_states(&surface, |states| {
             states.cached_state.get::<SurfaceCachedState>().current().geometry
         })
     }
@@ -73,7 +82,8 @@ pub trait Surface {
 
     /// Get preferred fractional scale.
     fn preferred_fractional_scale(&self) -> Option<f64> {
-        compositor::with_states(&self.surface(), |states| {
+        let surface = self.maybe_surface()?;
+        compositor::with_states(&surface, |states| {
             states
                 .data_map
                 .get::<RefCell<CatacombSurfaceData>>()
@@ -83,14 +93,17 @@ pub trait Surface {
 
     /// Get buffer scale.
     fn buffer_scale(&self) -> i32 {
-        compositor::with_states(&self.surface(), |states| {
-            let surface_data = states.data_map.get::<RefCell<CatacombSurfaceData>>();
-            if let Some(surface_data) = surface_data {
-                surface_data.borrow().buffer_size.w
-            } else {
-                1
-            }
-        })
+        match self.maybe_surface() {
+            Some(surface) => compositor::with_states(&surface, |states| {
+                let surface_data = states.data_map.get::<RefCell<CatacombSurfaceData>>();
+                if let Some(surface_data) = surface_data {
+                    surface_data.borrow().buffer_size.w
+                } else {
+                    1
+                }
+            }),
+            None => 1,
+        }
     }
 }
 
@@ -108,6 +121,13 @@ impl Surface for ShellSurface {
         match self {
             ShellSurface::Xdg(s) => s.surface(),
             ShellSurface::X11(s) => s.wl_surface().unwrap(),
+        }
+    }
+
+    fn maybe_surface(&self) -> Option<WlSurface> {
+        match self {
+            ShellSurface::Xdg(s) => Some(s.surface()),
+            ShellSurface::X11(s) => s.wl_surface(),
         }
     }
 

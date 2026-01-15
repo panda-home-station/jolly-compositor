@@ -7,7 +7,7 @@ use std::rc::{Rc, Weak};
 use std::sync::atomic::{self, AtomicU64};
 
 use tracing::info;
-use crate::windows::surface::ShellSurface;
+use crate::windows::surface::{ShellSurface, Surface};
 
 use smithay::utils::{Logical, Point};
 
@@ -568,7 +568,13 @@ impl Layouts {
         self.layouts
             .iter()
             .flat_map(|layout| layout.windows())
-            .find(|window| window.borrow().surface() == *surface)
+            .find(|window| {
+                window
+                    .borrow()
+                    .surface
+                    .maybe_surface()
+                    .map_or(false, |root| root == *surface)
+            })
     }
 
     /// Touch and return surface at the specified location.

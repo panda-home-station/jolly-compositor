@@ -262,100 +262,102 @@ impl<S: Surface + 'static> Window<S> {
         let geometry = self.surface.geometry();
         self.texture_cache.reset(self.size, geometry.map(|geometry| geometry.size));
 
-        compositor::with_surface_tree_upward(
-            &self.surface.surface(),
-            Point::from((0, 0)) - geometry.unwrap_or_default().loc,
-            |_, surface_data, location| {
-                let mut data = match surface_data.data_map.get::<RefCell<CatacombSurfaceData>>() {
-                    Some(data) => data.borrow_mut(),
-                    None => return TraversalAction::SkipChildren,
-                };
+        if let Some(root) = self.surface.maybe_surface() {
+            compositor::with_surface_tree_upward(
+                &root,
+                Point::from((0, 0)) - geometry.unwrap_or_default().loc,
+                |_, surface_data, location| {
+                    let mut data = match surface_data.data_map.get::<RefCell<CatacombSurfaceData>>() {
+                        Some(data) => data.borrow_mut(),
+                        None => return TraversalAction::SkipChildren,
+                    };
 
-                // Use the subsurface's location as the origin for its children.
-                let mut location = *location;
-                if surface_data.role == Some("subsurface") {
-                    let mut subsurface = surface_data.cached_state.get::<SubsurfaceCachedState>();
-                    location += subsurface.current().location;
-                }
+                    // Use the subsurface's location as the origin for its children.
+                    let mut location = *location;
+                    if surface_data.role == Some("subsurface") {
+                        let mut subsurface = surface_data.cached_state.get::<SubsurfaceCachedState>();
+                        location += subsurface.current().location;
+                    }
 
-                // Update surface data location so we don't need to recompute for processing.
-                data.location = location;
+                    // Update surface data location so we don't need to recompute for processing.
+                    data.location = location;
 
-                TraversalAction::DoChildren(location)
-            },
-            |surface, surface_data, _| {
-                let mut data = match surface_data.data_map.get::<RefCell<CatacombSurfaceData>>() {
-                    Some(data) => data.borrow_mut(),
-                    None => return,
-                };
+                    TraversalAction::DoChildren(location)
+                },
+                |surface, surface_data, _| {
+                    let mut data = match surface_data.data_map.get::<RefCell<CatacombSurfaceData>>() {
+                        Some(data) => data.borrow_mut(),
+                        None => return,
+                    };
 
-                // Skip surface if buffer was already imported.
-                if let Some(texture) = &data.texture {
-                    // Ensure texture's location is up to date.
-                    texture.set_location(data.location);
+                    // Skip surface if buffer was already imported.
+                    if let Some(texture) = &data.texture {
+                        // Ensure texture's location is up to date.
+                        texture.set_location(data.location);
 
-                    self.texture_cache.push(texture.clone(), data.location);
+                        self.texture_cache.push(texture.clone(), data.location);
 
-                    return;
-                }
+                        return;
+                    }
 
-                let buffer = match &data.buffer {
-                    Some(buffer) => buffer,
-                    None => return,
-                };
+                    let buffer = match &data.buffer {
+                        Some(buffer) => buffer,
+                        None => return,
+                    };
 
-                // Stage presentation callbacks for submission.
-                let mut feedback_state =
-                    surface_data.cached_state.get::<PresentationFeedbackCachedState>();
-                for callback in feedback_state.current().callbacks.drain(..) {
-                    let callback = PresentationCallback::new(surface.clone(), callback);
-                    self.presentation_callbacks.push(callback);
-                }
+                    // Stage presentation callbacks for submission.
+                    let mut feedback_state =
+                        surface_data.cached_state.get::<PresentationFeedbackCachedState>();
+                    for callback in feedback_state.current().callbacks.drain(..) {
+                        let callback = PresentationCallback::new(surface.clone(), callback);
+                        self.presentation_callbacks.push(callback);
+                    }
 
-                // Retrieve buffer damage.
-                let damage = data.damage.buffer();
+                    // Retrieve buffer damage.
+                    let damage = data.damage.buffer();
 
-                let texture = match single_pixel_buffer::get_single_pixel_buffer(buffer) {
-                    // Handle single-pixel buffer protocol.
-                    Ok(buffer) => {
-                        // Create 1x1 OpenGL texture.
-                        let rgba = buffer.rgba8888();
-                        Texture::from_spb(rgba, self.scale, data.location, &data, surface)
-                    },
-                    // Import and cache the buffer.
-                    Err(_) => match renderer.import_buffer(buffer, Some(surface_data), damage) {
-                        Some(Ok(texture)) => {
-                            // Release SHM buffers after import.
-                            if let Some(BufferType::Shm) = renderer::buffer_type(buffer) {
+                    let texture = match single_pixel_buffer::get_single_pixel_buffer(buffer) {
+                        // Handle single-pixel buffer protocol.
+                        Ok(buffer) => {
+                            // Create 1x1 OpenGL texture.
+                            let rgba = buffer.rgba8888();
+                            Texture::from_spb(rgba, self.scale, data.location, &data, surface)
+                        },
+                        // Import and cache the buffer.
+                        Err(_) => match renderer.import_buffer(buffer, Some(surface_data), damage) {
+                            Some(Ok(texture)) => {
+                                // Release SHM buffers after import.
+                                if let Some(BufferType::Shm) = renderer::buffer_type(buffer) {
+                                    data.buffer = None;
+                                }
+
+                                Texture::from_surface(
+                                    texture,
+                                    self.scale,
+                                    data.location,
+                                    &data,
+                                    surface,
+                                )
+                            },
+                            _ => {
+                                error!("unable to import buffer");
                                 data.buffer = None;
-                            }
-
-                            Texture::from_surface(
-                                texture,
-                                self.scale,
-                                data.location,
-                                &data,
-                                surface,
-                            )
+                                return;
+                            },
                         },
-                        _ => {
-                            error!("unable to import buffer");
-                            data.buffer = None;
-                            return;
-                        },
-                    },
-                };
+                    };
 
-                // Update and cache the texture.
-                let render_texture = RenderTexture::new(texture);
-                self.texture_cache.push(render_texture.clone(), data.location);
-                data.texture = Some(render_texture);
+                    // Update and cache the texture.
+                    let render_texture = RenderTexture::new(texture);
+                    self.texture_cache.push(render_texture.clone(), data.location);
+                    data.texture = Some(render_texture);
 
-                // Clear buffer damage after successful import.
-                data.damage.clear();
-            },
-            |_, _, _| true,
-        );
+                    // Clear buffer damage after successful import.
+                    data.damage.clear();
+                },
+                |_, _, _| true,
+            );
+        }
 
         // Ensure combined top-left corner of the texture cache is normalized to (0, 0).
         if geometry.is_none() {
@@ -444,13 +446,15 @@ impl<S: Surface + 'static> Window<S> {
 
     /// Execute a function for all surfaces of this window.
     fn with_surfaces<F: FnMut(&WlSurface, &SurfaceData)>(&self, mut fun: F) {
-        compositor::with_surface_tree_upward(
-            &self.surface.surface(),
-            (),
-            |_, _, _| TraversalAction::DoChildren(()),
-            |surface, surface_data, _| fun(surface, surface_data),
-            |_, _, _| true,
-        );
+        if let Some(root) = self.surface.maybe_surface() {
+            compositor::with_surface_tree_upward(
+                &root,
+                (),
+                |_, _, _| TraversalAction::DoChildren(()),
+                |surface, surface_data, _| fun(surface, surface_data),
+                |_, _, _| true,
+            );
+        }
     }
 
     /// Create a new transaction, or access the active one.
@@ -501,8 +505,9 @@ impl<S: Surface + 'static> Window<S> {
         self.ignore_transactions_locked = false;
 
         // Handle surface buffer changes.
+        if let Some(root) = self.surface.maybe_surface() {
         compositor::with_surface_tree_upward(
-            surface,
+            &root,
             (),
             |_, data, _| {
                 // Request buffer update.
@@ -537,6 +542,7 @@ impl<S: Surface + 'static> Window<S> {
             |_, _, _| (),
             |_, _, _| true,
         );
+        }
 
         // Send initial configure after the first commit.
         self.surface.initial_configure();
@@ -572,7 +578,9 @@ impl<S: Surface + 'static> Window<S> {
             popup.update_transform(surface_transform);
         }
 
-        let surface = self.surface.surface();
+        let Some(surface) = self.surface.maybe_surface() else {
+            return;
+        };
         if surface.version() >= 6 {
             surface.preferred_buffer_transform(surface_transform.into());
         }
@@ -624,7 +632,9 @@ impl<S: Surface + 'static> Window<S> {
     /// Update the surface's preferred scale, without updating its popups.
     fn set_preferred_scale_internal(&self, output_scale: f64) {
         let scale = self.window_scale(output_scale);
-        let surface = self.surface.surface();
+        let Some(surface) = self.surface.maybe_surface() else {
+            return;
+        };
 
         // Update fractional scale protocol.
         compositor::with_states(&surface, |states| {
@@ -685,8 +695,9 @@ impl<S: Surface + 'static> Window<S> {
         let origin_delta = self.texture_cache.origin_delta;
 
         let result = RefCell::new(None);
+        if let Some(root) = self.surface.maybe_surface() {
         compositor::with_surface_tree_downward(
-            &self.surface.surface(),
+            &root,
             bounds_loc,
             |_, surface_data, location| {
                 // Skip processing if surface was already found.
@@ -741,6 +752,7 @@ impl<S: Surface + 'static> Window<S> {
             },
             |_, _, _| result.borrow().is_none(),
         );
+        }
         result.into_inner()
     }
 
@@ -760,7 +772,8 @@ impl<S: Surface + 'static> Window<S> {
         mut popup: Window<PopupSurface>,
         parent: &WlSurface,
     ) -> Option<Window<PopupSurface>> {
-        if self.surface.surface() == *parent {
+        if let Some(root) = self.surface.maybe_surface() {
+        if root == *parent {
             // Inherit parent properties.
             popup.app_id.clone_from(&self.app_id);
             popup.visible = self.visible;
@@ -768,6 +781,7 @@ impl<S: Surface + 'static> Window<S> {
 
             self.popups.push(popup);
             return None;
+        }
         }
 
         for window in &mut self.popups {
@@ -789,7 +803,8 @@ impl<S: Surface + 'static> Window<S> {
         let window_size = self.bounds(output_scale).size.scale(output_scale / window_scale);
 
         self.popups.iter_mut().any(|popup| {
-            if popup.surface.surface() == *root_surface {
+            if let Some(root) = popup.surface.maybe_surface() {
+            if root == *root_surface {
                 // Calculate popup position and convert it to output scale.
                 let popup_loc = popup.constrained_location(window_size);
                 popup.output_rectangle.loc = popup_loc.scale(window_scale / output_scale);
@@ -802,6 +817,7 @@ impl<S: Surface + 'static> Window<S> {
                 popup.surface_commit_common(output_scale, &[], surface);
 
                 return true;
+            }
             }
 
             popup.popup_surface_commit(output_scale, root_surface, surface)
