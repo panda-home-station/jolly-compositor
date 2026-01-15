@@ -81,6 +81,7 @@ pub trait Surface {
     fn app_id(&self) -> Option<String> { None }
 
     /// Get preferred fractional scale.
+    #[allow(dead_code)]
     fn preferred_fractional_scale(&self) -> Option<f64> {
         let surface = self.maybe_surface()?;
         compositor::with_states(&surface, |states| {
@@ -92,6 +93,7 @@ pub trait Surface {
     }
 
     /// Get buffer scale.
+    #[allow(dead_code)]
     fn buffer_scale(&self) -> i32 {
         match self.maybe_surface() {
             Some(surface) => compositor::with_states(&surface, |states| {

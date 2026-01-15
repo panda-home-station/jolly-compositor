@@ -357,8 +357,8 @@ impl Udev {
 
         let mut gles = unsafe { GlesRenderer::new(context).expect("create renderer") };
 
-        // Initialize GPU for EGL rendering.
-        trace_error!(gles.bind_wl_display(display_handle));
+        // Initialize GPU for EGL rendering (ignore missing EGL_WL_bind_wayland_display).
+        let _ = gles.bind_wl_display(display_handle);
 
         // Create the DRM compositor.
         let drm_compositor = self

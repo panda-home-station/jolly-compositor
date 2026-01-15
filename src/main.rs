@@ -51,7 +51,10 @@ pub fn main() {
     };
 
     // Setup logging.
-    let directives = env::var("RUST_LOG").unwrap_or("warn,catacomb=info".into());
+    let directives = env::var("RUST_LOG").unwrap_or(
+        "info,catacomb=info,smithay::xwayland::xwm=error,smithay::backend::drm=error,calloop::loop_logic=error"
+            .into(),
+    );
     let env_filter = EnvFilter::builder().parse_lossy(directives);
     FmtSubscriber::builder().with_env_filter(env_filter).with_line_number(true).init();
 

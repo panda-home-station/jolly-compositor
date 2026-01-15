@@ -623,7 +623,7 @@ impl CompositorHandler for Catacomb {
         // 对于XWayland客户端，尝试获取XWaylandClientData
         // XWaylandClientData应该包含compositor_state字段
         match client.get_data::<smithay::xwayland::XWaylandClientData>() {
-            Some(xwayland_data) => {
+            Some(_xwayland_data) => {
                 // XWaylandClientData内部应该包含CompositorClientState
                 // 我们需要通过某种方式访问它
                 LazyLock::force(&FAKE_CLIENT_STATE)

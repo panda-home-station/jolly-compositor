@@ -154,6 +154,7 @@ impl TouchState {
     }
 
     /// Get current touch location.
+    #[allow(dead_code)]
     pub fn position(&self) -> Option<Point<f64, Logical>> {
         self.slot.map(|_| self.position)
     }
