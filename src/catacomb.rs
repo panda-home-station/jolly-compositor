@@ -417,8 +417,12 @@ impl Catacomb {
         let inhibited = inhibitors.any(|surface| self.windows.surface_visible(surface));
         self.idle_notifier_state.set_is_inhibited(inhibited);
 
-        // Check whether touch cursor should be drawn.
-        let cursor_position = self.touch_state.position().filter(|_| self.draw_cursor);
+        // Check whether cursor should be drawn.
+        let cursor_position = if self.draw_cursor {
+            Some(self.touch_state.pointer_position())
+        } else {
+            None
+        };
         let last_cursor_position = mem::replace(&mut self.last_cursor_position, cursor_position);
 
         // Redraw only when there is damage present.

@@ -6,7 +6,7 @@ use gilrs::{Button, Event as GilrsEvent, EventType as GilrsEventType};
 use catacomb_ipc::{GestureSector, KeyTrigger, Keysym, Modifiers};
 use smithay::backend::input::{
     AbsolutePositionEvent, ButtonState, Event, InputBackend, InputEvent, KeyState,
-    KeyboardKeyEvent, MouseButton, PointerButtonEvent, TouchEvent as _, TouchSlot,
+    KeyboardKeyEvent, MouseButton, PointerButtonEvent, PointerMotionEvent, TouchEvent as _, TouchSlot,
 };
 use smithay::input::keyboard::{
     FilterResult, Keycode, KeysymHandle, ModifiersState, XkbConfig, keysyms,
@@ -156,6 +156,11 @@ impl TouchState {
     /// Get current touch location.
     pub fn position(&self) -> Option<Point<f64, Logical>> {
         self.slot.map(|_| self.position)
+    }
+
+    /// Get current pointer location regardless of touch state.
+    pub fn pointer_position(&self) -> Point<f64, Logical> {
+        self.position
     }
 
     /// Get the updated active touch action.
@@ -418,6 +423,7 @@ impl Catacomb {
                 self.on_keyboard_input(code, state, time);
             },
             InputEvent::PointerButton { event } if event.button() == Some(MouseButton::Left) => {
+                self.draw_cursor = true;
                 let slot = TouchSlot::from(POINTER_TOUCH_SLOT);
                 let position = self.touch_state.position;
                 if event.state() == ButtonState::Pressed {
@@ -427,12 +433,34 @@ impl Catacomb {
                 }
             },
             InputEvent::PointerMotionAbsolute { event } => {
+                self.draw_cursor = true;
                 let position = self.transform_position(&event);
                 self.touch_state.position = position;
 
                 if self.touch_state.slot.is_some() {
                     let slot = TouchSlot::from(POINTER_TOUCH_SLOT);
-                    self.on_touch_motion(TouchEvent::new(TouchEventType::Down, slot, 0, position));
+                    self.on_touch_motion(TouchEvent::new(TouchEventType::Motion, slot, 0, position));
+                }
+            },
+            InputEvent::PointerMotion { event } => {
+                let canvas = self.windows.canvas();
+                let mut position = self.touch_state.position + event.delta();
+                let size = canvas.size().to_f64();
+                if position.x < 0.0 {
+                    position.x = 0.0;
+                } else if position.x > size.w {
+                    position.x = size.w;
+                }
+                if position.y < 0.0 {
+                    position.y = 0.0;
+                } else if position.y > size.h {
+                    position.y = size.h;
+                }
+                self.touch_state.position = position;
+
+                if self.touch_state.slot.is_some() {
+                    let slot = TouchSlot::from(POINTER_TOUCH_SLOT);
+                    self.on_touch_motion(TouchEvent::new(TouchEventType::Motion, slot, 0, position));
                 }
             },
             InputEvent::TouchDown { event } => {
