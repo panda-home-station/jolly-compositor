@@ -82,6 +82,16 @@ fn handle_message(buffer: &mut String, mut stream: UnixStream, catacomb: &mut Ca
 
             catacomb.windows.toggle_app(app_id);
         },
+        IpcMessage::SystemRole { role, app_id } => {
+            let app_id = match AppIdMatcher::try_from(app_id) {
+                Ok(app_id) => app_id,
+                Err(err) => {
+                    warn!("ignoring invalid ipc message: system role has invalid App ID regex: {err}");
+                    return;
+                },
+            };
+            catacomb.windows.set_system_role(role, app_id);
+        },
         IpcMessage::Exec { command } => {
             match std::process::Command::new("sh").arg("-c").arg(&command).spawn() {
                 Ok(_) => tracing::info!("IPC Exec spawned: {}", command),
@@ -201,6 +211,9 @@ fn handle_message(buffer: &mut String, mut stream: UnixStream, catacomb: &mut Ca
         },
         IpcMessage::Cursor { state } => {
             catacomb.draw_cursor = state == CliToggle::On;
+        },
+        IpcMessage::DumpWindows => {
+            catacomb.windows.log_window_tree();
         },
         // Ignore IPC replies.
         IpcMessage::DpmsReply { .. } | IpcMessage::ActiveWindow { .. } | IpcMessage::Clients { .. } => (),

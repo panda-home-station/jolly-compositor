@@ -35,6 +35,7 @@ use crate::overview::{DragActionType, DragAndDrop, Overview};
 use crate::windows::layout::{LayoutPosition, Layouts};
 use crate::windows::surface::{CatacombLayerSurface, InputSurface, InputSurfaceKind, Surface, ShellSurface};
 use crate::windows::window::Window;
+use std::collections::HashMap;
 
 pub mod layout;
 pub mod surface;
@@ -113,6 +114,7 @@ pub struct Windows {
     textures: Vec<CatacombElement>,
     start_time: Instant,
     output: Output,
+    system_roles: HashMap<String, AppIdMatcher>,
 
     /// Cached output state for rendering.
     ///
@@ -155,9 +157,69 @@ impl Windows {
             layouts: Default::default(),
             layers: Default::default(),
             view: Default::default(),
+            system_roles: Default::default(),
         }
     }
 
+    pub fn log_window_tree(&self) {
+        info!("===== Window Tree Dump =====");
+        let active_id = self.layouts.active().id;
+        info!("View: {:?}", match &self.view {
+            View::Overview(_) => "Overview",
+            View::DragAndDrop(_) => "DragAndDrop",
+            View::Fullscreen(_) => "Fullscreen",
+            View::Lock(_) => "Lock",
+            View::Workspace => "Workspace",
+        });
+        info!("Active layout id: {}", active_id.0);
+        info!("Parent layouts: {:?}", self.layouts.parent_layouts.iter().map(|id| id.0).collect::<Vec<_>>());
+        for (i, layout) in self.layouts.layouts().iter().enumerate() {
+            let marker = if layout.id == active_id { "*" } else { " " };
+            info!("{} Layout[{}] id={}", marker, i, layout.id.0);
+            if let Some(primary) = layout.primary() {
+                let w = primary.borrow();
+                let title = w.title().unwrap_or_default();
+                let xdg_id = w.xdg_app_id().unwrap_or_default();
+                let app_id = w.app_id.clone().unwrap_or_default();
+                let alive = w.alive();
+                let ty = match &w.surface {
+                    ShellSurface::Xdg(_) => "XDG",
+                    ShellSurface::X11(_) => "X11",
+                };
+                info!("    Primary: alive={} type={} title='{}' xdg_id='{}' app_id='{}'", alive, ty, title, xdg_id, app_id);
+            } else {
+                info!("    Primary: None");
+            }
+            if let Some(secondary) = layout.secondary() {
+                let w = secondary.borrow();
+                let title = w.title().unwrap_or_default();
+                let xdg_id = w.xdg_app_id().unwrap_or_default();
+                let app_id = w.app_id.clone().unwrap_or_default();
+                let alive = w.alive();
+                let ty = match &w.surface {
+                    ShellSurface::Xdg(_) => "XDG",
+                    ShellSurface::X11(_) => "X11",
+                };
+                info!("    Secondary: alive={} type={} title='{}' xdg_id='{}' app_id='{}'", alive, ty, title, xdg_id, app_id);
+            } else {
+                info!("    Secondary: None");
+            }
+        }
+        let mut i = 0;
+        for layer in self.layers.iter() {
+            let title = layer.title().unwrap_or_default();
+            let app_id = layer.xdg_app_id().or(layer.app_id.clone()).unwrap_or_default();
+            let alive = layer.alive();
+            info!("Layer[{}]: alive={} title='{}' app_id='{}'", i, alive, title, app_id);
+            i += 1;
+        }
+        if let Some((title, app_id)) = self.active_window_info() {
+            info!("Focus: title='{}' app_id='{}'", title, app_id);
+        } else {
+            info!("Focus: None");
+        }
+        info!("============================");
+    }
     /// Focus the first window matching the App ID.
     pub fn focus_app(&mut self, app_id: AppIdMatcher) -> bool {
         info!("focus_app: Request to focus {:?}", app_id);
@@ -277,19 +339,19 @@ impl Windows {
             }
 
             // If we are in workspace view, switch to the previous layout.
-            // Try to find JollyPad-Desktop explicitly to ensure we return home.
+            // Prefer system role 'home' if registered.
+            let role_home = self.system_roles.get("home");
             let desktop_index = self.layouts.layouts().iter().position(|l| {
                 if let Some(p) = l.primary() {
                     let w = p.borrow();
                     let t = w.title().unwrap_or_default();
                     let xdg_id = w.xdg_app_id().unwrap_or_default();
                     let app_id = w.app_id.clone().unwrap_or_default();
-                    
-                    info!("toggle_app check: checking layout primary title='{}', xdg_id='{}', app_id='{}'", t, xdg_id, app_id);
-                    
-                    t.contains("JollyPad-Desktop") || 
-                    xdg_id.contains("jolly-home") || 
-                    app_id.contains("jolly-home")
+                    if let Some(home_matcher) = role_home {
+                        home_matcher.matches(Some(&app_id)) || home_matcher.matches(Some(&t)) || home_matcher.matches(Some(&xdg_id))
+                    } else {
+                        false
+                    }
                 } else {
                     false
                 }
@@ -324,6 +386,22 @@ impl Windows {
         } else {
             // If not active, focus it.
             self.focus_app(app_id)
+        }
+    }
+
+    pub fn set_system_role(&mut self, role: String, app_id: AppIdMatcher) {
+        self.system_roles.insert(role, app_id);
+    }
+
+    /// Mark X11 window as dead by window id.
+    pub fn mark_dead_x11(&mut self, window_id: u32) {
+        start_transaction();
+        for mut window in self.layouts.windows_mut() {
+            if let ShellSurface::X11(s) = &window.surface {
+                if s.window_id() == window_id {
+                    window.kill();
+                }
+            }
         }
     }
 
@@ -931,9 +1009,36 @@ impl Windows {
     /// This will return the duration until the transaction should be timed out
     /// when there is an active transaction but it cannot be completed yet.
     pub fn update_transaction(&mut self) -> Option<Duration> {
-        // Skip update if no transaction is active.
         let start = TRANSACTION_START.load(Ordering::Relaxed);
         if start == 0 {
+            // Even without an active transaction, apply liveliness changes to reap dead windows.
+            let old_layout_count = self.layouts.active().window_count();
+            let old_layer_count = self.layers.len();
+
+            self.dirty |= self.layouts.apply_transaction(&self.output);
+            self.layers.apply_transaction();
+
+            if let View::Lock(Some(window)) = &mut self.view {
+                window.apply_transaction();
+            }
+
+            let old_canvas = mem::replace(&mut self.canvas, *self.output.canvas());
+            self.dirty |= old_canvas.orientation() != self.canvas.orientation()
+                || old_canvas.scale() != self.canvas.scale();
+
+            if self.layouts.is_empty()
+                && matches!(self.view, View::Overview(_) | View::DragAndDrop(_) | View::Fullscreen(_))
+            {
+                self.view = View::Workspace;
+            }
+
+            self.fix_view_after_reap();
+
+            self.dirty |= old_layout_count != self.layouts.active().window_count()
+                || old_layer_count != self.layers.len();
+
+            if self.dirty { }
+
             return None;
         }
 
@@ -993,6 +1098,9 @@ impl Windows {
             window.apply_transaction();
         }
 
+        // Ensure view is consistent after reaping (e.g. fullscreen app exited).
+        self.fix_view_after_reap();
+
         // Update canvas and force redraw on orientation change.
         let old_canvas = mem::replace(&mut self.canvas, *self.output.canvas());
         self.dirty |= old_canvas.orientation() != self.canvas.orientation()
@@ -1009,7 +1117,141 @@ impl Windows {
         self.dirty |= old_layout_count != self.layouts.active().window_count()
             || old_layer_count != self.layers.len();
 
+        if self.dirty { }
+
         None
+    }
+
+    fn fix_view_after_reap(&mut self) {
+        if let View::Fullscreen(window) = &self.view {
+            let (alive, surface_opt) = {
+                let window_ref = window.borrow();
+                (window_ref.alive(), window_ref.surface.maybe_surface())
+            };
+
+            if !alive {
+                self.view = View::Workspace;
+                let parent = self.layouts.parent_layouts.last().copied();
+                if let Some(parent_id) = parent {
+                    if let Some(index) = self.layouts.layouts().iter().position(|l| l.id == parent_id) {
+                        self.layouts.set_active(&self.output, Some(LayoutPosition::new(index, false)), true);
+                    } else {
+                        let role_home = self.system_roles.get("home");
+                        let desktop_index = self.layouts.layouts().iter().position(|l| {
+                            if let Some(p) = l.primary() {
+                                let w = p.borrow();
+                                let t = w.title().unwrap_or_default();
+                                let xdg_id = w.xdg_app_id().unwrap_or_default();
+                                let app_id = w.app_id.clone().unwrap_or_default();
+                                if let Some(home_matcher) = role_home {
+                                    home_matcher.matches(Some(&app_id)) || home_matcher.matches(Some(&t)) || home_matcher.matches(Some(&xdg_id))
+                                } else {
+                                    t == "JollyPad-Desktop" || xdg_id == "jolly-home" || app_id == "jolly-home"
+                                }
+                            } else {
+                                false
+                            }
+                        });
+                        if let Some(index) = desktop_index {
+                            self.layouts.set_active(&self.output, Some(LayoutPosition::new(index, false)), true);
+                        } else if !self.layouts.is_empty() {
+                            self.layouts.set_active(&self.output, Some(LayoutPosition::new(0, false)), true);
+                        } else {
+                            self.layouts.set_active(&self.output, None, true);
+                        }
+                    }
+                } else {
+                    let role_home = self.system_roles.get("home");
+                    let desktop_index = self.layouts.layouts().iter().position(|l| {
+                        if let Some(p) = l.primary() {
+                            let w = p.borrow();
+                            let t = w.title().unwrap_or_default();
+                            let xdg_id = w.xdg_app_id().unwrap_or_default();
+                            let app_id = w.app_id.clone().unwrap_or_default();
+                            if let Some(home_matcher) = role_home {
+                                home_matcher.matches(Some(&app_id)) || home_matcher.matches(Some(&t)) || home_matcher.matches(Some(&xdg_id))
+                            } else {
+                                t == "JollyPad-Desktop" || xdg_id == "jolly-home" || app_id == "jolly-home"
+                            }
+                        } else {
+                            false
+                        }
+                    });
+                    if let Some(index) = desktop_index {
+                        self.layouts.set_active(&self.output, Some(LayoutPosition::new(index, false)), true);
+                    } else if !self.layouts.is_empty() {
+                        self.layouts.set_active(&self.output, Some(LayoutPosition::new(0, false)), true);
+                    } else {
+                        self.layouts.set_active(&self.output, None, true);
+                    }
+                }
+                return;
+            }
+
+            let still_present = surface_opt.map(|surf| {
+                self.layouts
+                    .windows()
+                    .any(|w| w.surface.maybe_surface() == Some(surf.clone()))
+            }).unwrap_or(false);
+
+            if !still_present {
+                self.view = View::Workspace;
+                let parent = self.layouts.parent_layouts.last().copied();
+                if let Some(parent_id) = parent {
+                    if let Some(index) = self.layouts.layouts().iter().position(|l| l.id == parent_id) {
+                        self.layouts.set_active(&self.output, Some(LayoutPosition::new(index, false)), true);
+                    } else {
+                        let role_home = self.system_roles.get("home");
+                        let desktop_index = self.layouts.layouts().iter().position(|l| {
+                            if let Some(p) = l.primary() {
+                                let w = p.borrow();
+                                let t = w.title().unwrap_or_default();
+                                let xdg_id = w.xdg_app_id().unwrap_or_default();
+                                let app_id = w.app_id.clone().unwrap_or_default();
+                                if let Some(home_matcher) = role_home {
+                                    home_matcher.matches(Some(&app_id)) || home_matcher.matches(Some(&t)) || home_matcher.matches(Some(&xdg_id))
+                                } else {
+                                    t == "JollyPad-Desktop" || xdg_id == "jolly-home" || app_id == "jolly-home"
+                                }
+                            } else {
+                                false
+                            }
+                        });
+                        if let Some(index) = desktop_index {
+                            self.layouts.set_active(&self.output, Some(LayoutPosition::new(index, false)), true);
+                        } else if !self.layouts.is_empty() {
+                            self.layouts.set_active(&self.output, Some(LayoutPosition::new(0, false)), true);
+                        } else {
+                            self.layouts.set_active(&self.output, None, true);
+                        }
+                    }
+                } else {
+                    let role_home = self.system_roles.get("home");
+                    let desktop_index = self.layouts.layouts().iter().position(|l| {
+                        if let Some(p) = l.primary() {
+                            let w = p.borrow();
+                            let t = w.title().unwrap_or_default();
+                            let xdg_id = w.xdg_app_id().unwrap_or_default();
+                            let app_id = w.app_id.clone().unwrap_or_default();
+                            if let Some(home_matcher) = role_home {
+                                home_matcher.matches(Some(&app_id)) || home_matcher.matches(Some(&t)) || home_matcher.matches(Some(&xdg_id))
+                            } else {
+                                t == "JollyPad-Desktop" || xdg_id == "jolly-home" || app_id == "jolly-home"
+                            }
+                        } else {
+                            false
+                        }
+                    });
+                    if let Some(index) = desktop_index {
+                        self.layouts.set_active(&self.output, Some(LayoutPosition::new(index, false)), true);
+                    } else if !self.layouts.is_empty() {
+                        self.layouts.set_active(&self.output, Some(LayoutPosition::new(0, false)), true);
+                    } else {
+                        self.layouts.set_active(&self.output, None, true);
+                    }
+                }
+            }
+        }
     }
 
     /// Get timeout before transactions will be forcefully applied.

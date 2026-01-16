@@ -209,6 +209,13 @@ pub enum IpcMessage {
         /// App ID regex to match.
         app_id: String,
     },
+    /// Register a system role mapping (e.g., home, nav, overlay).
+    SystemRole {
+        /// Role name, e.g., "home", "nav", "overlay".
+        role: String,
+        /// App ID regex to match this role.
+        app_id: String,
+    },
     /// Active window info reply.
     #[cfg_attr(feature = "clap", clap(skip))]
     ActiveWindow {
@@ -220,6 +227,8 @@ pub enum IpcMessage {
     Clients {
         clients: Vec<ClientInfo>,
     },
+    /// Dump current window tree to logs.
+    DumpWindows,
 }
 
 /// Window client information.

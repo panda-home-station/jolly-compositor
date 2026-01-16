@@ -384,8 +384,22 @@ impl Layouts {
             let parent = self.parent_layouts.pop();
             self.active_layout = self.layouts.iter().position(|layout| Some(layout.id) == parent);
 
-            // Abandon history.
             if self.active_layout.is_none() {
+                if let Some(index) = self.layouts.iter().position(|l| {
+                    if let Some(p) = l.primary.as_ref() {
+                        let w = p.borrow();
+                        let t = w.title().unwrap_or_default();
+                        let xdg_id = w.xdg_app_id().unwrap_or_default();
+                        let app_id = w.app_id.clone().unwrap_or_default();
+                        t == "JollyPad-Desktop" || xdg_id == "jolly-home" || app_id == "jolly-home"
+                    } else {
+                        false
+                    }
+                }) {
+                    self.active_layout = Some(index);
+                } else if !self.layouts.is_empty() {
+                    self.active_layout = Some(0);
+                }
                 self.parent_layouts.clear();
             }
         }

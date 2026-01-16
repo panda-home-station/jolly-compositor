@@ -3,6 +3,7 @@ use smithay::utils::{Logical, Rectangle};
 use smithay::wayland::xwayland_shell::{XWaylandShellHandler, XWaylandShellState};
 use smithay::xwayland::xwm::{ResizeEdge, XwmId};
 use smithay::xwayland::{X11Surface, X11Wm, XwmHandler};
+use tracing::info;
 
 use crate::catacomb::Catacomb;
 
@@ -44,11 +45,15 @@ impl XwmHandler for Catacomb {
         if let Some(ext) = self.xwayland.as_mut() {
             ext.pending_configs.remove(&window.window_id());
         }
+        info!("x11 unmapped window id={}", window.window_id());
+        self.windows.mark_dead_x11(window.window_id());
     }
     fn destroyed_window(&mut self, _xwm: XwmId, window: X11Surface) {
         if let Some(ext) = self.xwayland.as_mut() {
             ext.pending_configs.remove(&window.window_id());
         }
+        info!("x11 destroyed window id={}", window.window_id());
+        self.windows.mark_dead_x11(window.window_id());
     }
 
     fn configure_request(
