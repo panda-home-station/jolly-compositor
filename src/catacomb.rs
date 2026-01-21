@@ -33,7 +33,7 @@ use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{Client, Display, DisplayHandle, Resource};
 use smithay::utils::{Logical, Point, Rectangle, SERIAL_COUNTER, Serial};
 use smithay::wayland::buffer::BufferHandler;
-use gilrs::Gilrs;
+use gilrs::{Button, Event as GilrsEvent, EventType as GilrsEventType, Gilrs};
 use smithay::wayland::compositor;
 use smithay::wayland::compositor::{CompositorClientState, CompositorHandler, CompositorState};
 use smithay::wayland::dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier};
@@ -100,6 +100,9 @@ use crate::udev::Udev;
 use crate::windows::Windows;
 use crate::windows::surface::Surface;
 use crate::{daemon, delegate_screencopy, ipc_server, trace_error};
+use smithay::input::keyboard::{keysyms, Keycode, ModifiersState};
+use smithay::backend::input::KeyState;
+use smithay::reexports::calloop::timer::TimeoutAction;
 
 /// Time before xdg_activation tokens are invalidated.
 const ACTIVATION_TIMEOUT: Duration = Duration::from_secs(10);
@@ -480,6 +483,8 @@ impl Catacomb {
     pub fn clients_info(&self) -> Vec<ClientInfo> {
         self.windows.clients_info()
     }
+
+    // Gamepad polling and mapping methods are implemented in input.rs
 
     /// Focus a new surface.
     fn focus(&mut self, surface: Option<WlSurface>) {
