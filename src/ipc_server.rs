@@ -93,6 +93,7 @@ fn handle_message(buffer: &mut String, mut stream: UnixStream, catacomb: &mut Ca
             catacomb.windows.set_system_role(role, app_id);
         },
         IpcMessage::Exec { command } => {
+            catacomb.windows.note_launch(command.clone());
             match std::process::Command::new("sh").arg("-c").arg(&command).spawn() {
                 Ok(_) => tracing::info!("IPC Exec spawned: {}", command),
                 Err(e) => tracing::error!("IPC Exec failed: {} - {}", command, e),

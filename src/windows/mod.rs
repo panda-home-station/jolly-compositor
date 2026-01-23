@@ -115,6 +115,7 @@ pub struct Windows {
     start_time: Instant,
     output: Output,
     system_roles: HashMap<String, AppIdMatcher>,
+    last_launch: Option<(String, Instant)>,
 
     /// Cached output state for rendering.
     ///
@@ -158,6 +159,7 @@ impl Windows {
             layers: Default::default(),
             view: Default::default(),
             system_roles: Default::default(),
+            last_launch: Default::default(),
         }
     }
 
@@ -396,11 +398,45 @@ impl Windows {
     /// Mark X11 window as dead by window id.
     pub fn mark_dead_x11(&mut self, window_id: u32) {
         start_transaction();
+        let mut killed_fullscreen = false;
+        if let View::Fullscreen(window) = &self.view {
+            if let ShellSurface::X11(s) = &window.borrow().surface {
+                if s.window_id() == window_id {
+                    killed_fullscreen = true;
+                }
+            }
+        }
         for mut window in self.layouts.windows_mut() {
             if let ShellSurface::X11(s) = &window.surface {
                 if s.window_id() == window_id {
                     window.kill();
                 }
+            }
+        }
+        if killed_fullscreen {
+            self.start_transaction().view = Some(View::Workspace);
+            let role_home = self.system_roles.get("home");
+            let desktop_index = self.layouts.layouts().iter().position(|l| {
+                if let Some(p) = l.primary() {
+                    let w = p.borrow();
+                    let t = w.title().unwrap_or_default();
+                    let xdg_id = w.xdg_app_id().unwrap_or_default();
+                    let app_id = w.app_id.clone().unwrap_or_default();
+                    if let Some(home_matcher) = role_home {
+                        home_matcher.matches(Some(&app_id)) || home_matcher.matches(Some(&t)) || home_matcher.matches(Some(&xdg_id))
+                    } else {
+                        t == "JollyPad-Desktop" || xdg_id == "jolly-home" || app_id == "jolly-home"
+                    }
+                } else {
+                    false
+                }
+            });
+            if let Some(index) = desktop_index {
+                self.layouts.set_active(&self.output, Some(LayoutPosition::new(index, false)), true);
+            } else if !self.layouts.is_empty() {
+                self.layouts.set_active(&self.output, Some(LayoutPosition::new(0, false)), true);
+            } else {
+                self.layouts.set_active(&self.output, None, true);
             }
         }
     }
@@ -430,6 +466,10 @@ impl Windows {
             .collect()
     }
 
+    pub fn note_launch(&mut self, command: String) {
+        info!("LAUNCH: exec_spawned command='{}'", command);
+        self.last_launch = Some((command, Instant::now()));
+    }
     /// Add a new window.
     pub fn add(&mut self, surface: ToplevelSurface) {
         // Set general window states.
@@ -462,6 +502,13 @@ impl Windows {
             // For overlay, ensure we stay in Workspace mode so we can see underlay
             self.view = View::Workspace;
         }
+
+        if let Some((cmd, t)) = self.last_launch.take() {
+            let title = window.borrow().title().unwrap_or_default();
+            let app_id = window.borrow().xdg_app_id().or(window.borrow().app_id.clone()).unwrap_or_default();
+            let elapsed = t.elapsed().as_millis();
+            info!("LAUNCH: window_created title='{}' app_id='{}' elapsed={}ms command='{}'", title, app_id, elapsed, cmd);
+        }
     }
 
     /// Add a new X11 window.
@@ -479,6 +526,13 @@ impl Windows {
 
         // Switch view to Fullscreen immediately
         self.view = View::Fullscreen(window.clone());
+
+        if let Some((cmd, t)) = self.last_launch.take() {
+            let title = window.borrow().title().unwrap_or_default();
+            let app_id = window.borrow().xdg_app_id().or(window.borrow().app_id.clone()).unwrap_or_default();
+            let elapsed = t.elapsed().as_millis();
+            info!("LAUNCH: x11_window_created title='{}' app_id='{}' elapsed={}ms command='{}'", title, app_id, elapsed, cmd);
+        }
     }
 
     /// Add a new layer shell window.
