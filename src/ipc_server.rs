@@ -71,6 +71,20 @@ fn handle_message(buffer: &mut String, mut stream: UnixStream, catacomb: &mut Ca
 
             catacomb.focus_app(app_id);
         },
+        IpcMessage::FocusRole { role } => {
+            // Try to focus by system role; fallback to default home matching.
+            if role == "home" {
+                // Try role mapping
+                if let Some(matcher) = catacomb.windows.system_role("home") {
+                    catacomb.focus_app(matcher);
+                } else {
+                    // Fallback to classic home ids
+                    if let Ok(app) = AppIdMatcher::try_from("^(JollyPad-Desktop|jolly-home|JollyPad-Launcher)$".to_string()) {
+                        catacomb.focus_app(app);
+                    }
+                }
+            }
+        },
         IpcMessage::ToggleWindow { app_id } => {
             let app_id = match AppIdMatcher::try_from(app_id) {
                 Ok(app_id) => app_id,
@@ -95,7 +109,17 @@ fn handle_message(buffer: &mut String, mut stream: UnixStream, catacomb: &mut Ca
         IpcMessage::Exec { command } => {
             catacomb.windows.note_launch(command.clone());
             match std::process::Command::new("sh").arg("-c").arg(&command).spawn() {
-                Ok(_) => tracing::info!("IPC Exec spawned: {}", command),
+                Ok(mut child) => {
+                    tracing::info!("IPC Exec spawned: {}", command);
+                    let _ = std::thread::spawn(move || {
+                        let _ = child.wait();
+                        let _ = std::process::Command::new("catacomb")
+                            .arg("msg")
+                            .arg("focus-role")
+                            .arg("home")
+                            .spawn();
+                    });
+                },
                 Err(e) => tracing::error!("IPC Exec failed: {} - {}", command, e),
             }
         },

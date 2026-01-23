@@ -195,6 +195,11 @@ pub enum IpcMessage {
         /// App ID regex to match.
         app_id: String,
     },
+    /// Focus by system role (e.g. "home").
+    FocusRole {
+        /// Role name, e.g., "home".
+        role: String,
+    },
     /// Execute a command.
     Exec {
         /// Command to execute.
@@ -408,7 +413,7 @@ impl Display for WindowScale {
 }
 
 /// User-defined App ID comparator.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AppIdMatcher {
     variant: AppIdMatcherVariant,
     base: String,
@@ -445,7 +450,7 @@ impl TryFrom<String> for AppIdMatcher {
 }
 
 /// Variants for the App ID matcher.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum AppIdMatcherVariant {
     Regex(Regex),
     Global,

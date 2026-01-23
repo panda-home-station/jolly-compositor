@@ -163,6 +163,10 @@ impl Windows {
         }
     }
 
+    pub fn system_role(&self, role: &str) -> Option<AppIdMatcher> {
+        self.system_roles.get(role).cloned()
+    }
+
     pub fn log_window_tree(&self) {
         info!("===== Window Tree Dump =====");
         let active_id = self.layouts.active().id;

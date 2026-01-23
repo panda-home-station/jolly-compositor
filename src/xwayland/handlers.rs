@@ -47,6 +47,7 @@ impl XwmHandler for Catacomb {
         }
         info!("x11 unmapped window id={}", window.window_id());
         self.windows.mark_dead_x11(window.window_id());
+        self.unstall();
     }
     fn destroyed_window(&mut self, _xwm: XwmId, window: X11Surface) {
         if let Some(ext) = self.xwayland.as_mut() {
@@ -54,6 +55,7 @@ impl XwmHandler for Catacomb {
         }
         info!("x11 destroyed window id={}", window.window_id());
         self.windows.mark_dead_x11(window.window_id());
+        self.unstall();
     }
 
     fn configure_request(
