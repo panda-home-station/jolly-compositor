@@ -1112,7 +1112,9 @@ impl Catacomb {
          let is_home_title = title.contains("JollyPad-Desktop") || title.contains("JollyPad-Launcher");
          let is_overlay_title = title == "JollyPad-Overlay";
          let is_home_app = app_id == "jolly-home";
-         let allow_key_mapping = is_home_title || is_overlay_title || is_home_app || title.is_empty();
+         let is_steam_title = title.contains("Steam") || title.contains("Steam Big Picture");
+         let is_steam_app = app_id.contains("steam") || app_id.contains("com.valvesoftware.Steam");
+         let allow_key_mapping = is_home_title || is_overlay_title || is_home_app || is_steam_title || is_steam_app || title.is_empty();
  
          match event.event {
              GilrsEventType::ButtonPressed(button, _) => {
@@ -1123,12 +1125,30 @@ impl Catacomb {
                          let state = KeyState::Pressed;
                          let _ = Self::handle_user_binding(self, &mods, key, state);
                      },
-                     Button::DPadUp if allow_key_mapping => self.simulate_key(keysyms::KEY_Up, KeyState::Pressed),
-                     Button::DPadDown if allow_key_mapping => self.simulate_key(keysyms::KEY_Down, KeyState::Pressed),
-                     Button::DPadLeft if allow_key_mapping => self.simulate_key(keysyms::KEY_Left, KeyState::Pressed),
-                     Button::DPadRight if allow_key_mapping => self.simulate_key(keysyms::KEY_Right, KeyState::Pressed),
-                     Button::South if allow_key_mapping => self.simulate_key(keysyms::KEY_Return, KeyState::Pressed),
-                     Button::East if allow_key_mapping => self.simulate_key(keysyms::KEY_Escape, KeyState::Pressed),
+                    Button::DPadUp if allow_key_mapping => {
+                        self.simulate_key(keysyms::KEY_Up, KeyState::Pressed);
+                        self.mapped_buttons.insert(Button::DPadUp);
+                    },
+                    Button::DPadDown if allow_key_mapping => {
+                        self.simulate_key(keysyms::KEY_Down, KeyState::Pressed);
+                        self.mapped_buttons.insert(Button::DPadDown);
+                    },
+                    Button::DPadLeft if allow_key_mapping => {
+                        self.simulate_key(keysyms::KEY_Left, KeyState::Pressed);
+                        self.mapped_buttons.insert(Button::DPadLeft);
+                    },
+                    Button::DPadRight if allow_key_mapping => {
+                        self.simulate_key(keysyms::KEY_Right, KeyState::Pressed);
+                        self.mapped_buttons.insert(Button::DPadRight);
+                    },
+                    Button::South if allow_key_mapping => {
+                        self.simulate_key(keysyms::KEY_Return, KeyState::Pressed);
+                        self.mapped_buttons.insert(Button::South);
+                    },
+                    Button::East if allow_key_mapping => {
+                        self.simulate_key(keysyms::KEY_Escape, KeyState::Pressed);
+                        self.mapped_buttons.insert(Button::East);
+                    },
                      _ => {}
                  }
             },
@@ -1140,12 +1160,36 @@ impl Catacomb {
                          let state = KeyState::Released;
                          let _ = Self::handle_user_binding(self, &mods, key, state);
                     },
-                     Button::DPadUp if allow_key_mapping => self.simulate_key(keysyms::KEY_Up, KeyState::Released),
-                     Button::DPadDown if allow_key_mapping => self.simulate_key(keysyms::KEY_Down, KeyState::Released),
-                     Button::DPadLeft if allow_key_mapping => self.simulate_key(keysyms::KEY_Left, KeyState::Released),
-                     Button::DPadRight if allow_key_mapping => self.simulate_key(keysyms::KEY_Right, KeyState::Released),
-                     Button::South if allow_key_mapping => self.simulate_key(keysyms::KEY_Return, KeyState::Released),
-                     Button::East if allow_key_mapping => self.simulate_key(keysyms::KEY_Escape, KeyState::Released),
+                     Button::DPadUp => {
+                         if self.mapped_buttons.remove(&Button::DPadUp) {
+                             self.simulate_key(keysyms::KEY_Up, KeyState::Released);
+                         }
+                     },
+                     Button::DPadDown => {
+                         if self.mapped_buttons.remove(&Button::DPadDown) {
+                             self.simulate_key(keysyms::KEY_Down, KeyState::Released);
+                         }
+                     },
+                     Button::DPadLeft => {
+                         if self.mapped_buttons.remove(&Button::DPadLeft) {
+                             self.simulate_key(keysyms::KEY_Left, KeyState::Released);
+                         }
+                     },
+                     Button::DPadRight => {
+                         if self.mapped_buttons.remove(&Button::DPadRight) {
+                             self.simulate_key(keysyms::KEY_Right, KeyState::Released);
+                         }
+                     },
+                     Button::South => {
+                         if self.mapped_buttons.remove(&Button::South) {
+                             self.simulate_key(keysyms::KEY_Return, KeyState::Released);
+                         }
+                     },
+                     Button::East => {
+                         if self.mapped_buttons.remove(&Button::East) {
+                             self.simulate_key(keysyms::KEY_Escape, KeyState::Released);
+                         }
+                     },
                      _ => {}
                 }
             },
