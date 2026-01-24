@@ -94,7 +94,9 @@ fn handle_message(buffer: &mut String, mut stream: UnixStream, catacomb: &mut Ca
                 },
             };
 
-            catacomb.windows.toggle_app(app_id);
+            if catacomb.windows.toggle_app(app_id) {
+                catacomb.unstall();
+            }
         },
         IpcMessage::SystemRole { role, app_id } => {
             let app_id = match AppIdMatcher::try_from(app_id) {
