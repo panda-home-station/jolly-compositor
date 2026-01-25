@@ -36,6 +36,11 @@ use crate::windows::layout::{LayoutPosition, Layouts};
 use crate::windows::surface::{CatacombLayerSurface, InputSurface, InputSurfaceKind, Surface, ShellSurface};
 use crate::windows::window::Window;
 use std::collections::HashMap;
+use std::time::Instant as StdInstant;
+use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::PathBuf;
+use dirs;
 
 pub mod layout;
 pub mod surface;
@@ -50,6 +55,14 @@ const MAX_TRANSACTION_MILLIS: u64 = 1000;
 /// Global transaction timer in milliseconds.
 static TRANSACTION_START: AtomicU64 = AtomicU64::new(0);
 
+#[derive(Debug, Clone)]
+struct LaunchCtx {
+    command: String,
+    command_key: Option<String>,
+    card_id: Option<String>,
+    time: StdInstant,
+}
+
 /// Start a new transaction.
 ///
 /// This will reset the transaction start to the current system time if there's
@@ -59,7 +72,6 @@ pub fn start_transaction() {
     if TRANSACTION_START.load(Ordering::Relaxed) != 0 {
         return;
     }
-
     let now = UNIX_EPOCH.elapsed().unwrap().as_millis() as u64;
     TRANSACTION_START.store(now, Ordering::Relaxed);
 }
@@ -116,6 +128,12 @@ pub struct Windows {
     output: Output,
     system_roles: HashMap<String, AppIdMatcher>,
     last_launch: Option<(String, Instant)>,
+    /// Pending launch context for mapping command/card to observed app_id.
+    pending_launch: Option<LaunchCtx>,
+    /// Mapping from normalized command key to strict app_id.
+    command_map: HashMap<String, String>,
+    /// Mapping from card_id to strict app_id (reserved for future use).
+    card_map: HashMap<String, String>,
 
     /// Cached output state for rendering.
     ///
@@ -134,6 +152,13 @@ pub struct Windows {
 
     /// Client-independent damage.
     dirty: bool,
+    trace_scene_enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Mappings {
+    command_map: HashMap<String, String>,
+    card_map: HashMap<String, String>,
 }
 
 impl Windows {
@@ -141,7 +166,7 @@ impl Windows {
         let output = Output::new_dummy(display);
         let canvas = *output.canvas();
 
-        Self {
+        let mut s = Self {
             event_loop,
             output,
             canvas,
@@ -160,11 +185,111 @@ impl Windows {
             view: Default::default(),
             system_roles: Default::default(),
             last_launch: Default::default(),
+            pending_launch: Default::default(),
+            command_map: Default::default(),
+            card_map: Default::default(),
+            trace_scene_enabled: false,
+        };
+        s.load_mappings();
+        s
+    }
+
+    pub fn set_trace_scene_enabled(&mut self, enabled: bool) {
+        self.trace_scene_enabled = enabled;
+        if self.trace_scene_enabled {
+            self.log_scene_stack();
         }
+    }
+
+    fn log_scene_stack(&self) {
+        let v = self.pending_view();
+        let name = match v {
+            View::Workspace => "Workspace",
+            View::Overview(_) => "Overview",
+            View::DragAndDrop(_) => "DragAndDrop",
+            View::Fullscreen(_) => "Fullscreen",
+            View::Lock(_) => "Lock",
+        };
+        let active_id = self.layouts.active().id.0;
+        info!("Scene: view={} active_layout_id={}", name, active_id);
+        let mut i = 0usize;
+        for layout in self.layouts.layouts() {
+            let marker = if layout.id == self.layouts.active().id { "*" } else { " " };
+            let p = layout.primary().map(|w| w.borrow().title().unwrap_or_default()).unwrap_or_default();
+            let s = layout.secondary().map(|w| w.borrow().title().unwrap_or_default()).unwrap_or_default();
+            info!("{} [{}] primary='{}' secondary='{}'", marker, i, p, s);
+            i += 1;
+        }
+        let mut j = 0usize;
+        for layer in self.layers.iter() {
+            let t = layer.title().unwrap_or_default();
+            let a = layer.xdg_app_id().or(layer.app_id.clone()).unwrap_or_default();
+            info!("[L{}] title='{}' app_id='{}'", j, t, a);
+            j += 1;
+        }
+        if let Some((title, app_id)) = self.active_window_info() {
+            info!("Focus: title='{}' app_id='{}'", title, app_id);
+        } else {
+            info!("Focus: None");
+        }
+    }
+
+    pub fn log_focus_graph(&self) {
+        info!("===== Focus Graph =====");
+        self.log_scene_stack();
+        info!("=======================");
     }
 
     pub fn system_role(&self, role: &str) -> Option<AppIdMatcher> {
         self.system_roles.get(role).cloned()
+    }
+
+    pub fn focus_mapped_command(&mut self, key: &str) -> bool {
+        if let Some(app_id_str) = self.command_map.get(key).cloned() {
+            if let Ok(app) = AppIdMatcher::try_from(app_id_str) {
+                return self.focus_app(app);
+            }
+        }
+        false
+    }
+
+    pub fn focus_mapped_card(&mut self, card_id: &str) -> bool {
+        if let Some(app_id_str) = self.card_map.get(card_id).cloned() {
+            if let Ok(app) = AppIdMatcher::try_from(app_id_str) {
+                return self.focus_app(app);
+            }
+        }
+        false
+    }
+
+    fn mappings_path() -> Option<PathBuf> {
+        dirs::config_dir().map(|d| d.join("catacomb").join("mappings.json"))
+    }
+
+    fn load_mappings(&mut self) {
+        if let Some(path) = Self::mappings_path() {
+            if let Ok(data) = fs::read_to_string(&path) {
+                if let Ok(m) = serde_json::from_str::<Mappings>(&data) {
+                    self.command_map = m.command_map;
+                    self.card_map = m.card_map;
+                }
+            }
+        }
+    }
+
+    fn save_mappings(&self) {
+        if let Some(path) = Self::mappings_path() {
+            if let Some(dir) = path.parent() {
+                let _ = fs::create_dir_all(dir);
+            }
+            let m = Mappings {
+                command_map: self.command_map.clone(),
+                card_map: self.card_map.clone(),
+            };
+            if let Ok(json) = serde_json::to_string_pretty(&m) {
+                let _ = fs::write(path, json);
+            }
+        }
     }
 
     pub fn log_window_tree(&self) {
@@ -474,6 +599,22 @@ impl Windows {
         info!("LAUNCH: exec_spawned command='{}'", command);
         self.last_launch = Some((command, Instant::now()));
     }
+    /// Note a rich launch context used for transparent focus on subsequent opens.
+    pub fn note_launch_context(
+        &mut self,
+        command: String,
+        command_key: Option<String>,
+        card_id: Option<String>,
+    ) {
+        info!("LAUNCH: exec_spawned command='{}' key='{:?}' card_id='{:?}'", command, command_key, card_id);
+        self.last_launch = Some((command.clone(), Instant::now()));
+        self.pending_launch = Some(LaunchCtx {
+            command,
+            command_key,
+            card_id,
+            time: StdInstant::now(),
+        });
+    }
     /// Add a new window.
     pub fn add(&mut self, surface: ToplevelSurface) {
         // Set general window states.
@@ -513,6 +654,16 @@ impl Windows {
             let elapsed = t.elapsed().as_millis();
             info!("LAUNCH: window_created title='{}' app_id='{}' elapsed={}ms command='{}'", title, app_id, elapsed, cmd);
         }
+        // Bind pending launch mappings to observed app_id.
+        if let Some(ctx) = self.pending_launch.take() {
+            if let Some(key) = ctx.command_key {
+                self.command_map.insert(key, window.borrow().xdg_app_id().or(window.borrow().app_id.clone()).unwrap_or_default());
+            }
+            if let Some(card) = ctx.card_id {
+                self.card_map.insert(card, window.borrow().xdg_app_id().or(window.borrow().app_id.clone()).unwrap_or_default());
+            }
+            self.save_mappings();
+        }
     }
 
     /// Add a new X11 window.
@@ -536,6 +687,15 @@ impl Windows {
             let app_id = window.borrow().xdg_app_id().or(window.borrow().app_id.clone()).unwrap_or_default();
             let elapsed = t.elapsed().as_millis();
             info!("LAUNCH: x11_window_created title='{}' app_id='{}' elapsed={}ms command='{}'", title, app_id, elapsed, cmd);
+        }
+        if let Some(ctx) = self.pending_launch.take() {
+            if let Some(key) = ctx.command_key {
+                self.command_map.insert(key, window.borrow().xdg_app_id().or(window.borrow().app_id.clone()).unwrap_or_default());
+            }
+            if let Some(card) = ctx.card_id {
+                self.card_map.insert(card, window.borrow().xdg_app_id().or(window.borrow().app_id.clone()).unwrap_or_default());
+            }
+            self.save_mappings();
         }
     }
 
@@ -1132,6 +1292,13 @@ impl Windows {
             }
         }
 
+        let old_view_name = match &self.view {
+            View::Workspace => "Workspace",
+            View::Overview(_) => "Overview",
+            View::DragAndDrop(_) => "DragAndDrop",
+            View::Fullscreen(_) => "Fullscreen",
+            View::Lock(_) => "Lock",
+        };
         // Clear transaction timer.
         TRANSACTION_START.store(0, Ordering::Relaxed);
 
@@ -1143,6 +1310,19 @@ impl Windows {
         if let Some(view) = self.transaction.take().and_then(|transaction| transaction.view) {
             self.dirty = true;
             self.view = view;
+            if self.trace_scene_enabled {
+                let new_view_name = match &self.view {
+                    View::Workspace => "Workspace",
+                    View::Overview(_) => "Overview",
+                    View::DragAndDrop(_) => "DragAndDrop",
+                    View::Fullscreen(_) => "Fullscreen",
+                    View::Lock(_) => "Lock",
+                };
+                let now_ms = UNIX_EPOCH.elapsed().unwrap().as_millis() as u64;
+                let delta_ms = now_ms.saturating_sub(start);
+                info!("SceneSwitch: {} -> {} elapsed={}ms", old_view_name, new_view_name, delta_ms);
+                self.log_scene_stack();
+            }
         }
 
         // Apply layout/liveliness changes.

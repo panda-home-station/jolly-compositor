@@ -205,6 +205,15 @@ pub enum IpcMessage {
         /// Command to execute.
         command: String,
     },
+    /// Execute or focus an existing app window.
+    ExecOrFocus {
+        /// Command to execute when no existing window matches.
+        command: String,
+        /// Optional strict App ID hint to focus if already running.
+        app_id_hint: Option<String>,
+        /// Optional card identifier for future mapping (reserved).
+        card_id: Option<String>,
+    },
     /// Get the active window info.
     GetActiveWindow,
     /// Get the list of windows.
@@ -231,6 +240,28 @@ pub enum IpcMessage {
     #[cfg_attr(feature = "clap", clap(skip))]
     Clients {
         clients: Vec<ClientInfo>,
+    },
+    /// Toggle input gating logs.
+    LogInput {
+        /// Desired log state.
+        state: CliToggle,
+    },
+    /// Dump focus graph to logs.
+    DumpFocusGraph,
+    /// Toggle scene stack tracing.
+    TraceScene {
+        /// Desired trace state.
+        state: CliToggle,
+    },
+    /// Role-driven action for controlled scenes.
+    RoleAction {
+        /// Role name, e.g., "home", "nav", "overlay".
+        role: String,
+        /// Action key, e.g., "toggle", "select", "back", "navigate".
+        action: String,
+        /// Optional payload, e.g., navigate direction "up|down|left|right".
+        #[cfg_attr(feature = "clap", clap(long))]
+        payload: Option<String>,
     },
     /// Dump current window tree to logs.
     DumpWindows,

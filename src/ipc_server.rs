@@ -7,6 +7,8 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 
 use catacomb_ipc::{AppIdMatcher, CliToggle, IpcMessage, Keysym, WindowScale};
+use smithay::backend::input::KeyState;
+use smithay::input::keyboard::keysyms;
 use smithay::input::keyboard::XkbConfig;
 use smithay::reexports::calloop::LoopHandle;
 use tracing::{error, warn};
@@ -71,6 +73,87 @@ fn handle_message(buffer: &mut String, mut stream: UnixStream, catacomb: &mut Ca
 
             catacomb.focus_app(app_id);
         },
+        IpcMessage::ExecOrFocus { command, app_id_hint, card_id } => {
+            // Try to focus existing window by strict App ID first.
+            if let Some(app_id) = app_id_hint {
+                match AppIdMatcher::try_from(app_id) {
+                    Ok(app) => {
+                        if catacomb.windows.focus_app(app) {
+                            catacomb.unstall();
+                            return;
+                        }
+                    },
+                    Err(err) => {
+                        warn!("ignoring invalid ipc message: ExecOrFocus has invalid App ID regex: {err}");
+                    },
+                }
+            }
+            if let Some(c) = card_id.as_ref() {
+                if catacomb.windows.focus_mapped_card(c) {
+                    catacomb.unstall();
+                    return;
+                }
+            }
+            // Try focus by learned command mapping.
+            fn normalize_command_key(cmd: &str) -> Option<String> {
+                let t = cmd.trim();
+                if t.is_empty() { return None; }
+                let tokens: Vec<&str> = t.split_whitespace().collect();
+                if tokens.is_empty() { return None; }
+
+                // flatpak run [options] <app_id> [...]
+                if tokens.len() >= 2 && tokens[0] == "flatpak" && tokens[1] == "run" {
+                    for tok in tokens.iter().skip(2) {
+                        let s = *tok;
+                        if !s.starts_with('-') && s.contains('.') {
+                            return Some(s.to_string());
+                        }
+                    }
+                    return tokens.last().map(|s| s.to_string());
+                }
+
+                // gtk-launch <desktop_id>
+                if tokens[0] == "gtk-launch" && tokens.len() >= 2 {
+                    return Some(tokens[1].to_string());
+                }
+
+                // steam [-applaunch <id>]
+                if tokens[0] == "steam" {
+                    if let Some(idx) = tokens.iter().position(|&x| x == "-applaunch") {
+                        if let Some(app) = tokens.get(idx + 1) {
+                            return Some(format!("steam:{}", app));
+                        }
+                    }
+                    return Some("steam".to_string());
+                }
+
+                // Fallback: first token
+                Some(tokens[0].to_string())
+            }
+            let key = normalize_command_key(&command);
+            if let Some(k) = key.as_ref() {
+                if catacomb.windows.focus_mapped_command(k) {
+                    catacomb.unstall();
+                    return;
+                }
+            }
+            // Fallback to spawning the command, noting rich context.
+            catacomb.windows.note_launch_context(command.clone(), key, card_id);
+            match std::process::Command::new("sh").arg("-c").arg(&command).spawn() {
+                Ok(mut child) => {
+                    tracing::info!("IPC ExecOrFocus spawned: {}", command);
+                    let _ = std::thread::spawn(move || {
+                        let _ = child.wait();
+                        let _ = std::process::Command::new("catacomb")
+                            .arg("msg")
+                            .arg("focus-role")
+                            .arg("home")
+                            .spawn();
+                    });
+                },
+                Err(e) => tracing::error!("IPC ExecOrFocus failed: {} - {}", command, e),
+            }
+        },
         IpcMessage::FocusRole { role } => {
             // Try to focus by system role; fallback to default home matching.
             if role == "home" {
@@ -107,6 +190,86 @@ fn handle_message(buffer: &mut String, mut stream: UnixStream, catacomb: &mut Ca
                 },
             };
             catacomb.windows.set_system_role(role, app_id);
+        },
+        IpcMessage::LogInput { state } => {
+            let enabled = matches!(state, CliToggle::On);
+            catacomb.input_log_enabled = enabled;
+        },
+        IpcMessage::DumpFocusGraph => {
+            catacomb.windows.log_focus_graph();
+        },
+        IpcMessage::TraceScene { state } => {
+            let enabled = matches!(state, CliToggle::On);
+            catacomb.windows.set_trace_scene_enabled(enabled);
+        },
+        IpcMessage::RoleAction { role, action, payload } => {
+            let role = role.as_str();
+            let act = action.as_str();
+            if (role == "nav" || role == "overlay") && act == "toggle" {
+                if let Ok(app) = AppIdMatcher::try_from("JollyPad-Overlay".to_string()) {
+                    if catacomb.windows.toggle_app(app) {
+                        catacomb.unstall();
+                    }
+                }
+                return;
+            }
+            if role == "overlay" && act == "back" {
+                if let Ok(app) = AppIdMatcher::try_from("JollyPad-Overlay".to_string()) {
+                    if catacomb.windows.toggle_app(app) {
+                        catacomb.unstall();
+                    }
+                }
+                return;
+            }
+            if role == "home" && act == "focus" {
+                if let Some(matcher) = catacomb.windows.system_role("home") {
+                    catacomb.focus_app(matcher);
+                }
+                return;
+            }
+            if role == "home" && act == "back" {
+                // Minimal back: focus home if not already
+                if let Some(matcher) = catacomb.windows.system_role("home") {
+                    catacomb.focus_app(matcher);
+                }
+                return;
+            }
+            if role == "home" && act == "select" {
+                catacomb.simulate_key(keysyms::KEY_Return, KeyState::Pressed);
+                catacomb.simulate_key(keysyms::KEY_Return, KeyState::Released);
+                return;
+            }
+            if role == "home" && act == "navigate" {
+                match payload.as_deref() {
+                    Some("up") => {
+                        catacomb.simulate_key(keysyms::KEY_Up, KeyState::Pressed);
+                        catacomb.simulate_key(keysyms::KEY_Up, KeyState::Released);
+                    }
+                    Some("down") => {
+                        catacomb.simulate_key(keysyms::KEY_Down, KeyState::Pressed);
+                        catacomb.simulate_key(keysyms::KEY_Down, KeyState::Released);
+                    }
+                    Some("left") => {
+                        catacomb.simulate_key(keysyms::KEY_Left, KeyState::Pressed);
+                        catacomb.simulate_key(keysyms::KEY_Left, KeyState::Released);
+                    }
+                    Some("right") => {
+                        catacomb.simulate_key(keysyms::KEY_Right, KeyState::Pressed);
+                        catacomb.simulate_key(keysyms::KEY_Right, KeyState::Released);
+                    }
+                    _ => {}
+                }
+                return;
+            }
+            if role == "nav" && act == "select" {
+                // Placeholder: rely on UI to handle Return; no-op here
+                return;
+            }
+            if role == "nav" && act == "navigate" {
+                // Placeholder: payload could be up/down/left/right; currently no-op
+                let _ = payload;
+                return;
+            }
         },
         IpcMessage::Exec { command } => {
             catacomb.windows.note_launch(command.clone());

@@ -3,7 +3,7 @@
 use std::time::{Duration, Instant};
 
 use gilrs::{Button, Event as GilrsEvent, EventType as GilrsEventType};
-use catacomb_ipc::{GestureSector, KeyTrigger, Keysym, Modifiers};
+use catacomb_ipc::{AppIdMatcher, GestureSector, KeyTrigger, Keysym, Modifiers};
 use smithay::backend::input::{
     AbsolutePositionEvent, ButtonState, Event, InputBackend, InputEvent, KeyState,
     KeyboardKeyEvent, MouseButton, PointerButtonEvent, PointerMotionEvent, TouchEvent as _, TouchSlot,
@@ -972,7 +972,6 @@ impl Catacomb {
         }
     }
 
-    /// Get keyboard action for a keysym.
     fn keyboard_action(
         catacomb: &mut Catacomb,
         mods: &ModifiersState,
@@ -980,13 +979,35 @@ impl Catacomb {
         code: Keycode,
         state: KeyState,
     ) -> FilterResult<InputAction> {
+        let (title, app_id) = catacomb.active_window_info().unwrap_or_default();
+        let is_home_title = title.contains("JollyPad-Desktop") || title.contains("JollyPad-Launcher");
+        let is_overlay_title = title == "JollyPad-Overlay";
+        let is_home_app = app_id == "jolly-home";
+        let is_steam_title = title.contains("Steam") || title.contains("Steam Big Picture");
+        let is_steam_app = app_id.contains("steam") || app_id.contains("com.valvesoftware.Steam");
+        let allow_key_mapping =
+            is_home_title || is_overlay_title || is_home_app || is_steam_title || is_steam_app || title.is_empty();
+
+        if allow_key_mapping {
+            match code.raw() {
+                312 => {
+                    catacomb.simulate_key(keysyms::KEY_Return, state);
+                    return InputAction::None.into();
+                },
+                313 => {
+                    catacomb.simulate_key(keysyms::KEY_Escape, state);
+                    return InputAction::None.into();
+                },
+                _ => {},
+            }
+        }
+
         match (keysym.modified_sym().raw(), state) {
             (keysym @ keysyms::KEY_XF86Switch_VT_1..=keysyms::KEY_XF86Switch_VT_12, _) => {
                 let vt = (keysym - keysyms::KEY_XF86Switch_VT_1 + 1) as i32;
                 InputAction::ChangeVt(vt).into()
             },
             (_, state) => {
-                // Handle BTN_MODE (316 + 8 = 324) explicitly
                 if code.raw() == 324 {
                     return Self::handle_user_binding(catacomb, mods, Keysym::BtnMode, state);
                 }
@@ -1107,45 +1128,107 @@ impl Catacomb {
 
     /// Handle a gamepad event.
      fn handle_gamepad_event(&mut self, event: GilrsEvent) {
-         // Title-aware gating: enable mapping in Home/Overlay or when desktop (no active title).
          let (title, app_id) = self.active_window_info().unwrap_or_default();
-         let is_home_title = title.contains("JollyPad-Desktop") || title.contains("JollyPad-Launcher");
-         let is_overlay_title = title == "JollyPad-Overlay";
-         let is_home_app = app_id == "jolly-home";
+         let role_home = self.windows.system_role("home");
+         let role_nav = self.windows.system_role("nav");
+         let mut active_role: Option<&'static str> = None;
+         if let Some(m) = role_home.as_ref() {
+             if m.matches(Some(&app_id)) || m.matches(Some(&title)) {
+                 active_role = Some("home");
+             }
+         }
+         if active_role.is_none() {
+             if let Some(m) = role_nav.as_ref() {
+                 if m.matches(Some(&app_id)) || m.matches(Some(&title)) {
+                     active_role = Some("nav");
+                 }
+             }
+         }
          let is_steam_title = title.contains("Steam") || title.contains("Steam Big Picture");
          let is_steam_app = app_id.contains("steam") || app_id.contains("com.valvesoftware.Steam");
-         let allow_key_mapping = is_home_title || is_overlay_title || is_home_app || is_steam_title || is_steam_app || title.is_empty();
+         let allow_key_mapping = active_role.is_some() || is_steam_title || is_steam_app || title.is_empty();
  
          match event.event {
              GilrsEventType::ButtonPressed(button, _) => {
                   match button {
-                      Button::Mode => {
-                          let mods = ModifiersState::default();
-                         let key = Keysym::BtnMode;
-                         let state = KeyState::Pressed;
-                         let _ = Self::handle_user_binding(self, &mods, key, state);
-                     },
+                     Button::Mode => {
+                          if active_role.is_some() || title.is_empty() {
+                              if let Ok(app) = AppIdMatcher::try_from("JollyPad-Overlay".to_string()) {
+                                  let toggled = self.windows.toggle_app(app);
+                                  if toggled {
+                                      self.note_input_event("overlay:toggle");
+                                      self.unstall();
+                                  } else {
+                                      let mods = ModifiersState::default();
+                                      let key = Keysym::BtnMode;
+                                      let state = KeyState::Pressed;
+                                      let _ = Self::handle_user_binding(self, &mods, key, state);
+                                  }
+                              }
+                          } else {
+                              let mods = ModifiersState::default();
+                              let key = Keysym::BtnMode;
+                              let state = KeyState::Pressed;
+                              let _ = Self::handle_user_binding(self, &mods, key, state);
+                          }
+                      },
                     Button::DPadUp if allow_key_mapping => {
+                        if self.input_log_enabled {
+                            if let Some(r) = active_role {
+                                tracing::info!("pad: role={} action=navigate dir=up app_id='{}' title='{}'", r, app_id, title);
+                            }
+                        }
+                        self.note_input_event("navigate:up");
                         self.simulate_key(keysyms::KEY_Up, KeyState::Pressed);
                         self.mapped_buttons.insert(Button::DPadUp);
                     },
                     Button::DPadDown if allow_key_mapping => {
+                        if self.input_log_enabled {
+                            if let Some(r) = active_role {
+                                tracing::info!("pad: role={} action=navigate dir=down app_id='{}' title='{}'", r, app_id, title);
+                            }
+                        }
+                        self.note_input_event("navigate:down");
                         self.simulate_key(keysyms::KEY_Down, KeyState::Pressed);
                         self.mapped_buttons.insert(Button::DPadDown);
                     },
                     Button::DPadLeft if allow_key_mapping => {
+                        if self.input_log_enabled {
+                            if let Some(r) = active_role {
+                                tracing::info!("pad: role={} action=navigate dir=left app_id='{}' title='{}'", r, app_id, title);
+                            }
+                        }
+                        self.note_input_event("navigate:left");
                         self.simulate_key(keysyms::KEY_Left, KeyState::Pressed);
                         self.mapped_buttons.insert(Button::DPadLeft);
                     },
                     Button::DPadRight if allow_key_mapping => {
+                        if self.input_log_enabled {
+                            if let Some(r) = active_role {
+                                tracing::info!("pad: role={} action=navigate dir=right app_id='{}' title='{}'", r, app_id, title);
+                            }
+                        }
+                        self.note_input_event("navigate:right");
                         self.simulate_key(keysyms::KEY_Right, KeyState::Pressed);
                         self.mapped_buttons.insert(Button::DPadRight);
                     },
                     Button::South if allow_key_mapping => {
+                        if self.input_log_enabled {
+                            if let Some(r) = active_role {
+                                tracing::info!("pad: role={} action=select app_id='{}' title='{}'", r, app_id, title);
+                            }
+                        }
+                        self.note_input_event("select");
                         self.simulate_key(keysyms::KEY_Return, KeyState::Pressed);
                         self.mapped_buttons.insert(Button::South);
                     },
                     Button::East if allow_key_mapping => {
+                        if self.input_log_enabled {
+                            if let Some(r) = active_role {
+                                tracing::info!("pad: role={} action=back app_id='{}' title='{}'", r, app_id, title);
+                            }
+                        }
+                        self.note_input_event("back");
                         self.simulate_key(keysyms::KEY_Escape, KeyState::Pressed);
                         self.mapped_buttons.insert(Button::East);
                     },
@@ -1155,10 +1238,12 @@ impl Catacomb {
             GilrsEventType::ButtonReleased(button, _) => {
                 match button {
                     Button::Mode => {
-                         let mods = ModifiersState::default();
-                         let key = Keysym::BtnMode;
-                         let state = KeyState::Released;
-                         let _ = Self::handle_user_binding(self, &mods, key, state);
+                         if active_role.is_none() && !title.is_empty() {
+                             let mods = ModifiersState::default();
+                             let key = Keysym::BtnMode;
+                             let state = KeyState::Released;
+                             let _ = Self::handle_user_binding(self, &mods, key, state);
+                         }
                     },
                      Button::DPadUp => {
                          if self.mapped_buttons.remove(&Button::DPadUp) {
@@ -1198,7 +1283,7 @@ impl Catacomb {
      }
 
     /// Simulate a key press/release.
-    fn simulate_key(&mut self, keysym: u32, state: KeyState) {
+    pub fn simulate_key(&mut self, keysym: u32, state: KeyState) {
         let keycodes = self.keysym_to_keycode(keysym);
         if let Some(keycode) = keycodes.first() {
              self.on_keyboard_input(*keycode, state, 0);

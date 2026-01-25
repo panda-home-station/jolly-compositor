@@ -159,7 +159,10 @@ pub struct Catacomb {
     idle_inhibitors: Vec<WlSurface>,
     last_focus: Option<WlSurface>,
     locker: Option<SessionLocker>,
+    pub input_log_enabled: bool,
     ime_override: Option<bool>,
+    last_input_time: Option<Instant>,
+    last_input_label: Option<String>,
 
     // Indicates if rendering was intentionally stalled.
     //
@@ -379,6 +382,9 @@ impl Catacomb {
             stalled: Default::default(),
             locker: Default::default(),
             xwayland: Some(xwayland_ext),
+            input_log_enabled: false,
+            last_input_time: Default::default(),
+            last_input_label: Default::default(),
         }
     }
 
@@ -450,6 +456,9 @@ impl Catacomb {
             // This is necessary, since rendering might have been skipped due to DRM planes
             // and the next frame could still contain more damage like overview animations.
             if !frame.rendered {
+                if self.input_log_enabled {
+                    tracing::info!("frame: skipped");
+                }
                 let frame_interval = self.canvas().frame_interval();
                 self.backend.schedule_redraw(frame_interval);
             } else if let Some(locker) = self.locker.take() {
@@ -467,6 +476,13 @@ impl Catacomb {
 
         // Request new frames for visible windows.
         self.windows.request_frames();
+    }
+
+    pub fn note_input_event(&mut self, label: impl Into<String>) {
+        if self.input_log_enabled {
+            self.last_input_time = Some(Instant::now());
+            self.last_input_label = Some(label.into());
+        }
     }
 
     /// Focus a window by App ID.
@@ -1059,6 +1075,16 @@ impl FramePacer {
             let render_time = catacomb.frame_pacer.frame_start.elapsed();
             let frame_interval = catacomb.canvas().frame_interval();
             catacomb.frame_pacer.add_frame(render_time, frame_interval);
+            if catacomb.input_log_enabled {
+                let rt_ms = render_time.as_millis();
+                let fi_ms = frame_interval.as_millis();
+                tracing::info!("frame: render_time={}ms interval={}ms", rt_ms, fi_ms);
+                if let Some(start) = catacomb.last_input_time.take() {
+                    let label = catacomb.last_input_label.take().unwrap_or_default();
+                    let delay_ms = start.elapsed().as_millis();
+                    tracing::info!("input->render: label='{}' delay={}ms", label, delay_ms);
+                }
+            }
 
             Ok(PostAction::Remove)
         });
