@@ -112,6 +112,17 @@ fn handle_message(buffer: &mut String, mut stream: UnixStream, catacomb: &mut Ca
                     return tokens.last().map(|s| s.to_string());
                 }
 
+                // /usr/bin/flatpak run [options] <app_id> [...]
+                if tokens.len() >= 3 && tokens[0] == "/usr/bin/flatpak" && tokens[1] == "run" {
+                    for tok in tokens.iter().skip(2) {
+                        let s = *tok;
+                        if !s.starts_with('-') && s.contains('.') {
+                            return Some(s.to_string());
+                        }
+                    }
+                    return tokens.last().map(|s| s.to_string());
+                }
+
                 // gtk-launch <desktop_id>
                 if tokens[0] == "gtk-launch" && tokens.len() >= 2 {
                     return Some(tokens[1].to_string());

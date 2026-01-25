@@ -453,6 +453,9 @@ pub struct AppIdMatcher {
 impl AppIdMatcher {
     /// Check if this matcher captures the passed App ID.
     pub fn matches(&self, app_id: Option<&String>) -> bool {
+        if self.base.is_empty() {
+            return false;
+        }
         match (&self.variant, app_id) {
             (AppIdMatcherVariant::Global, _) => true,
             (AppIdMatcherVariant::Regex(regex), Some(app_id)) => regex.is_match(app_id),

@@ -576,7 +576,9 @@ impl Windows {
             if let Some(window_rc) = weak.upgrade() {
                 let window = window_rc.borrow();
                 // Prefer xdg_app_id if available, fallback to window.app_id
-                let app_id = window.xdg_app_id().or(window.app_id.clone()).unwrap_or_default();
+                let xdg_id = window.xdg_app_id();
+                let win_id = window.app_id.clone();
+                let app_id = xdg_id.clone().or(win_id.clone()).unwrap_or_default();
                 let title = window.title().unwrap_or_default();
                 return Some((title, app_id));
             }
@@ -650,9 +652,11 @@ impl Windows {
 
         if let Some((cmd, t)) = self.last_launch.take() {
             let title = window.borrow().title().unwrap_or_default();
-            let app_id = window.borrow().xdg_app_id().or(window.borrow().app_id.clone()).unwrap_or_default();
+            let xdg_id = window.borrow().xdg_app_id();
+            let win_id = window.borrow().app_id.clone();
+            let app_id = xdg_id.clone().or(win_id.clone()).unwrap_or_default();
             let elapsed = t.elapsed().as_millis();
-            info!("LAUNCH: window_created title='{}' app_id='{}' elapsed={}ms command='{}'", title, app_id, elapsed, cmd);
+            info!("LAUNCH: window_created title='{}' xdg_app_id={:?} app_id={:?} final='{}' elapsed={}ms command='{}'", title, xdg_id, win_id, app_id, elapsed, cmd);
         }
         // Bind pending launch mappings to observed app_id.
         if let Some(ctx) = self.pending_launch.take() {
