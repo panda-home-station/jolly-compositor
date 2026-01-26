@@ -980,13 +980,7 @@ impl Catacomb {
         state: KeyState,
     ) -> FilterResult<InputAction> {
         let (title, app_id) = catacomb.active_window_info().unwrap_or_default();
-        let is_home_title = title.contains("JollyPad-Desktop") || title.contains("JollyPad-Launcher");
-        let is_overlay_title = title == "JollyPad-Overlay";
-        let is_home_app = app_id == "jolly-home";
-        let is_steam_title = title.contains("Steam") || title.contains("Steam Big Picture");
-        let is_steam_app = app_id.contains("steam") || app_id.contains("com.valvesoftware.Steam");
-        let allow_key_mapping =
-            is_home_title || is_overlay_title || is_home_app || is_steam_title || is_steam_app || title.is_empty();
+        let allow_key_mapping = true;
 
         if allow_key_mapping {
             match code.raw() {
@@ -1144,9 +1138,7 @@ impl Catacomb {
                  }
              }
          }
-         let is_steam_title = title.contains("Steam") || title.contains("Steam Big Picture");
-         let is_steam_app = app_id.contains("steam") || app_id.contains("com.valvesoftware.Steam");
-         let allow_key_mapping = active_role.is_some() || is_steam_title || is_steam_app || title.is_empty();
+         let allow_key_mapping = true;
  
          match event.event {
              GilrsEventType::ButtonPressed(button, _) => {
