@@ -4,6 +4,7 @@ use std::error::Error;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
+use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 
 use catacomb_ipc::{AppIdMatcher, CliToggle, IpcMessage, Keysym, WindowScale};
@@ -12,6 +13,7 @@ use smithay::input::keyboard::keysyms;
 use smithay::input::keyboard::XkbConfig;
 use smithay::reexports::calloop::LoopHandle;
 use tracing::{error, warn};
+use libc;
 
 use crate::catacomb::Catacomb;
 use crate::config::{GestureBinding, GestureBindingAction, KeyBinding};
@@ -148,10 +150,19 @@ fn handle_message(buffer: &mut String, mut stream: UnixStream, catacomb: &mut Ca
                     return;
                 }
             }
-            // Fallback to spawning the command, noting rich context.
-            catacomb.windows.note_launch_context(command.clone(), key, card_id);
-            match std::process::Command::new("sh").arg("-c").arg(&command).spawn() {
+            catacomb.windows.note_launch_context(command.clone(), key, card_id, None);
+            let mut cmd = std::process::Command::new("sh");
+            cmd.arg("-c").arg(&command);
+            unsafe {
+                cmd.pre_exec(|| {
+                    libc::setpgid(0, 0);
+                    Ok(())
+                });
+            }
+            match cmd.spawn() {
                 Ok(mut child) => {
+                    let pid = child.id() as i32;
+                    catacomb.windows.update_pending_pgid(pid);
                     tracing::info!("IPC ExecOrFocus spawned: {}", command);
                     let _ = std::thread::spawn(move || {
                         let _ = child.wait();
@@ -284,8 +295,18 @@ fn handle_message(buffer: &mut String, mut stream: UnixStream, catacomb: &mut Ca
         },
         IpcMessage::Exec { command } => {
             catacomb.windows.note_launch(command.clone());
-            match std::process::Command::new("sh").arg("-c").arg(&command).spawn() {
+            let mut cmd = std::process::Command::new("sh");
+            cmd.arg("-c").arg(&command);
+            unsafe {
+                cmd.pre_exec(|| {
+                    libc::setpgid(0, 0);
+                    Ok(())
+                });
+            }
+            match cmd.spawn() {
                 Ok(mut child) => {
+                    let pid = child.id() as i32;
+                    catacomb.windows.update_pending_pgid(pid);
                     tracing::info!("IPC Exec spawned: {}", command);
                     let _ = std::thread::spawn(move || {
                         let _ = child.wait();

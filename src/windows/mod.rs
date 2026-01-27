@@ -3,6 +3,7 @@
 use std::borrow::Cow;
 use std::cell::{RefCell, RefMut};
 use std::mem;
+use std::cmp;
 use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, UNIX_EPOCH};
@@ -40,7 +41,9 @@ use std::time::Instant as StdInstant;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+use std::process::Command;
 use dirs;
+use libc;
 
 pub mod layout;
 pub mod surface;
@@ -61,6 +64,8 @@ struct LaunchCtx {
     command_key: Option<String>,
     card_id: Option<String>,
     time: StdInstant,
+    pid: Option<i32>,
+    pgid: Option<i32>,
 }
 
 /// Start a new transaction.
@@ -130,6 +135,12 @@ pub struct Windows {
     last_launch: Option<(String, Instant)>,
     /// Pending launch context for mapping command/card to observed app_id.
     pending_launch: Option<LaunchCtx>,
+    /// Pending resume for process group (PGID, ResumeTime, AppID).
+    pending_resume: Option<(i32, Instant, Option<String>)>,
+    /// Role of the currently activated window (persisted even if window is destroyed).
+    active_role: Option<String>,
+    /// Last focused App ID (used for audio corking).
+    last_focused_app_id: Option<String>,
     /// Mapping from normalized command key to strict app_id.
     command_map: HashMap<String, String>,
     /// Mapping from card_id to strict app_id (reserved for future use).
@@ -186,6 +197,9 @@ impl Windows {
             system_roles: Default::default(),
             last_launch: Default::default(),
             pending_launch: Default::default(),
+            pending_resume: None,
+            active_role: None,
+            last_focused_app_id: None,
             command_map: Default::default(),
             card_map: Default::default(),
             trace_scene_enabled: false,
@@ -428,6 +442,8 @@ impl Windows {
                 info!("focus_app: Switching to normal app (position {:?}). Clearing parents.", position);
                 self.layouts.set_active(&self.output, Some(position), true);
             }
+            // Clear layer focus to ensure toplevel activation logic works
+            self.layers.focus = None;
             true
         } else {
             info!("focus_app: No matching window found.");
@@ -597,25 +613,41 @@ impl Windows {
             .collect()
     }
 
-    pub fn note_launch(&mut self, command: String) {
-        info!("LAUNCH: exec_spawned command='{}'", command);
-        self.last_launch = Some((command, Instant::now()));
-    }
-    /// Note a rich launch context used for transparent focus on subsequent opens.
     pub fn note_launch_context(
         &mut self,
         command: String,
         command_key: Option<String>,
         card_id: Option<String>,
+        pgid: Option<i32>,
     ) {
-        info!("LAUNCH: exec_spawned command='{}' key='{:?}' card_id='{:?}'", command, command_key, card_id);
+        info!("LAUNCH: exec_spawned command='{}' key='{:?}' card_id='{:?}' pgid='{:?}'", command, command_key, card_id, pgid);
         self.last_launch = Some((command.clone(), Instant::now()));
         self.pending_launch = Some(LaunchCtx {
             command,
             command_key,
             card_id,
             time: StdInstant::now(),
+            pid: None,
+            pgid,
         });
+    }
+    pub fn note_launch(&mut self, command: String) {
+        info!("LAUNCH: exec_spawned command='{}'", command);
+        self.last_launch = Some((command.clone(), Instant::now()));
+        self.pending_launch = Some(LaunchCtx {
+            command,
+            command_key: None,
+            card_id: None,
+            time: StdInstant::now(),
+            pid: None,
+            pgid: None,
+        });
+    }
+    pub fn update_pending_pgid(&mut self, pid: i32) {
+        if let Some(ctx) = self.pending_launch.as_mut() {
+            ctx.pid = Some(pid);
+            ctx.pgid = Some(pid);
+        }
     }
     /// Add a new window.
     pub fn add(&mut self, surface: ToplevelSurface) {
@@ -634,7 +666,8 @@ impl Windows {
         let transform = self.output.orientation().surface_transform();
         let scale = self.output.scale();
 
-        let window = Rc::new(RefCell::new(Window::new(surface, scale, transform, None)));
+        let pgid = self.pending_launch.as_ref().and_then(|ctx| ctx.pgid);
+        let window = Rc::new(RefCell::new(Window::new(surface, scale, transform, None, pgid)));
         self.layouts.create(&self.output, window.clone());
 
         // Auto-focus the new window
@@ -677,7 +710,8 @@ impl Windows {
         let transform = self.output.orientation().surface_transform();
         let scale = self.output.scale();
 
-        let window = Rc::new(RefCell::new(Window::new(surface, scale, transform, None)));
+        let pgid = self.pending_launch.as_ref().and_then(|ctx| ctx.pgid);
+        let window = Rc::new(RefCell::new(Window::new(surface, scale, transform, None, pgid)));
         self.layouts.create(&self.output, window.clone());
 
         // Auto-focus the new window
@@ -709,7 +743,7 @@ impl Windows {
         let scale = self.output.scale();
 
         let surface = CatacombLayerSurface::new(layer, surface);
-        let mut window = Window::new(surface, scale, transform, Some(namespace));
+        let mut window = Window::new(surface, scale, transform, Some(namespace), None);
 
         window.enter(&self.output);
         self.layers.add(window);
@@ -720,7 +754,7 @@ impl Windows {
         let transform = self.output.orientation().surface_transform();
         let scale = self.output.scale();
 
-        self.orphan_popups.push(Window::new(popup, scale, transform, None));
+        self.orphan_popups.push(Window::new(popup, scale, transform, None, None));
     }
 
     /// Move popup location.
@@ -743,7 +777,7 @@ impl Windows {
         };
 
         // Set lock surface size.
-        let mut window = Window::new(surface, output_scale, surface_transform, None);
+        let mut window = Window::new(surface, output_scale, surface_transform, None, None);
         window.set_dimensions(output_scale, Rectangle::from_size(output_size));
 
         // Update lockscreen.
@@ -1043,6 +1077,60 @@ impl Windows {
         }
     }
 
+    fn cork_app_audio(&self, app_id: Option<&str>, cork: bool) {
+        let app_id = match app_id {
+            Some(id) if !id.is_empty() => id,
+            _ => return,
+        };
+
+        let output = Command::new("pactl")
+            .arg("list")
+            .arg("sink-inputs")
+            .output();
+
+        let output = match output {
+            Ok(o) if o.status.success() => o,
+            _ => return,
+        };
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut current_id: Option<String> = None;
+        let mut targets: Vec<String> = Vec::new();
+
+        for line in stdout.lines() {
+            let trimmed = line.trim_start();
+            if let Some(rest) = trimmed.strip_prefix("Sink Input #") {
+                let num = rest.trim().split_whitespace().next().unwrap_or("");
+                if num.is_empty() {
+                    current_id = None;
+                } else {
+                    current_id = Some(num.to_string());
+                }
+                continue;
+            }
+
+            if trimmed.starts_with("pipewire.access.portal.app_id =") && trimmed.contains(app_id) {
+                if let Some(id) = current_id.clone() {
+                    targets.push(id);
+                }
+            }
+        }
+
+        if targets.is_empty() {
+            return;
+        }
+
+        let mute_value = if cork { "1" } else { "0" };
+
+        for id in targets {
+            let _ = Command::new("pactl")
+                .arg("set-sink-input-mute")
+                .arg(&id)
+                .arg(mute_value)
+                .output();
+        }
+    }
+
     /// Mark all rendered clients as presented for `wp_presentation`.
     pub fn mark_presented(
         &mut self,
@@ -1073,6 +1161,13 @@ impl Windows {
     pub fn reap_layer(&mut self, surface: &LayerSurface) {
         // Start transaction to ensure window is reaped even without any resize.
         start_transaction();
+
+        // Clear focus if this layer was focused
+        if let Some((focus_wl, _)) = &self.layers.focus {
+            if focus_wl == surface.wl_surface() {
+                self.layers.focus = None;
+            }
+        }
 
         // Handle layer shell death.
         let old_exclusive = *self.output.exclusive();
@@ -1159,52 +1254,168 @@ impl Windows {
             return window.as_ref().map(|window| (window.surface().clone(), window.app_id.clone()));
         }
 
-        let focused = match self.layouts.focus.as_ref().map(Weak::upgrade) {
-            // Use focused surface if the window is still alive.
-            Some(Some(window)) => {
-                // Clear urgency.
-                let mut window = window.borrow_mut();
-                window.urgent = false;
+        // If a layer is focused, the toplevel stack is effectively unfocused for activation purposes
+        let layer_focused = self.layers.focus.is_some();
 
-                Some((window.surface.clone(), window.app_id.clone()))
-            },
-            // Fallback to primary if secondary perished.
-            Some(None) => {
-                let active_layout = self.layouts.pending_active();
-                let primary = active_layout.primary();
-                let focused = primary.map(|window| {
+        let focused = if layer_focused {
+            None
+        } else {
+            match self.layouts.focus.as_ref().map(Weak::upgrade) {
+                // Use focused surface if the window is still alive.
+                Some(Some(window)) => {
                     // Clear urgency.
                     let mut window = window.borrow_mut();
                     window.urgent = false;
 
-                    (window.surface.clone(), window.app_id.clone())
-                });
-                self.layouts.focus = primary.map(Rc::downgrade);
-                focused
-            },
-            // Do not upgrade if toplevel is explicitly unfocused.
-            None => None,
+                    Some((window.surface.clone(), window.app_id.clone(), window.title()))
+                },
+                // Fallback to primary if secondary perished.
+                Some(None) => {
+                    let active_layout = self.layouts.pending_active();
+                    let primary = active_layout.primary();
+                    let focused = primary.map(|window| {
+                        // Clear urgency.
+                        let mut window = window.borrow_mut();
+                        window.urgent = false;
+
+                        (window.surface.clone(), window.app_id.clone(), window.title())
+                    });
+                    self.layouts.focus = primary.map(Rc::downgrade);
+                    focused
+                },
+                // Do not upgrade if toplevel is explicitly unfocused.
+                None => None,
+            }
         };
 
         // Update window activation state.
-        if self.activated.as_ref() != focused.as_ref().map(|(surface, _)| surface) {
+        let new_surface = focused.as_ref().map(|(surface, _, _)| surface);
+        if self.activated.as_ref() != new_surface {
             // Clear old activated flag.
-            if let Some(activated) = self.activated.take() {
+            let old_activated = self.activated.take();
+            if let Some(activated) = old_activated.as_ref() {
                 activated.set_state(|_state| {
                     activated.set_activated(false);
                 });
+
+                // Suspend old process group
+                if let Some(window) = self.layouts.windows().find(|w| w.surface == *activated) {
+                    if let Some(pgid) = window.process_group {
+                        if pgid > 0 {
+                            unsafe { libc::kill(-pgid, libc::SIGSTOP) };
+                            info!("Suspended process group {}", pgid);
+
+                            let app_id = window.app_id.as_deref();
+                            self.cork_app_audio(app_id, true);
+                        }
+                    }
+                }
             }
 
+            // Capture old role before updating
+            let old_role = self.active_role.clone();
+            // Reset active role, will be updated below if applicable
+            self.active_role = None;
+
             // Set new activated flag.
-            if let Some((surface, _)) = &focused {
+            if let Some((surface, app_id_opt, title_opt)) = &focused {
+                // Determine new role
+                for (role, matcher) in &self.system_roles {
+                     let app_id_match = app_id_opt.as_ref().map_or(false, |id| matcher.matches(Some(id)));
+                     let title_match = title_opt.as_ref().map_or(false, |t| matcher.matches(Some(t)));
+                     
+                     if app_id_match || title_match {
+                        self.active_role = Some(role.clone());
+                        break;
+                     }
+                }
+
                 surface.set_state(|_state| {
                     surface.set_activated(true);
                 });
+
+                // Always cancel any pending resume when switching to a new window
+                self.pending_resume = None;
+
+                // Resume new process group
+                if let Some(window_rc) = self.layouts.focus.as_ref().and_then(|w| w.upgrade()) {
+                    let window = window_rc.borrow();
+                    if let Some(pgid) = window.process_group {
+                        if pgid > 0 {
+                            // Check if we should delay resume (e.g. coming from Nav/Home)
+                            let mut delay = false;
+                            
+                            // Check cached old role (handles destroyed surfaces)
+                            if let Some(role) = &old_role {
+                                if role == "nav" || role == "home" {
+                                    // If we are switching TO a system role (like Home), DO NOT DELAY.
+                                    if let Some(new_role) = &self.active_role {
+                                        if new_role == "home" {
+                                            delay = false;
+                                        } else {
+                                            delay = true;
+                                        }
+                                    } else {
+                                        delay = true;
+                                    }
+                                }
+                            }
+                            
+                            // Fallback: check if previous surface was a system role layer (if still alive)
+                            if !delay {
+                                if let Some(prev) = old_activated.as_ref() {
+                                    if let Some(prev_wl) = prev.maybe_surface() {
+                                        if self.layers.iter().any(|l| {
+                                            l.surface.maybe_surface().as_ref() == Some(&prev_wl) &&
+                                            l.app_id.as_ref().map_or(false, |id| {
+                                                self.system_roles.get("nav").map_or(false, |m| m.matches(Some(id))) ||
+                                                self.system_roles.get("home").map_or(false, |m| m.matches(Some(id)))
+                                            })
+                                        }) {
+                                            delay = true;
+                                        }
+                                    }
+                                }
+                            }
+
+                            info!(
+                                "Focus switch: OldRole={:?} NewRole={:?} Delay={}", 
+                                old_role, self.active_role, delay
+                            );
+
+                            if delay {
+                                let app_id = window.app_id.clone();
+                                self.pending_resume = Some((pgid, Instant::now() + Duration::from_millis(100), app_id));
+                                info!("Delayed resume for pgid {} (transient system role)", pgid);
+                            } else {
+                                unsafe { libc::kill(-pgid, libc::SIGCONT) };
+                                info!("Resumed process group {}", pgid);
+
+                                let app_id = window.app_id.as_deref();
+                                self.cork_app_audio(app_id, false);
+                            }
+                        }
+                    }
+                }
+            } else if let Some((focus_wl, _)) = &self.layers.focus {
+                // Toplevel focus lost, but Layer is focused. Capture its role.
+                if let Some(layer) = self.layers.iter().find(|l| l.surface.surface() == *focus_wl) {
+                      let title = layer.title();
+                      let app_id = layer.xdg_app_id().or(layer.app_id.clone());
+                      
+                      for (role, matcher) in &self.system_roles {
+                           if matcher.matches(app_id.as_ref()) || (title.is_some() && matcher.matches(title.as_ref())) {
+                                self.active_role = Some(role.clone());
+                                info!("Layer focus active_role set to {}", role);
+                                break;
+                           }
+                      }
+                 }
             }
-            self.activated = focused.as_ref().map(|(surface, _)| surface.clone());
+            self.activated = new_surface.cloned();
         }
 
-        focused.and_then(|(surface, app_id)| surface.maybe_surface().map(|wl| (wl, app_id)))
+        focused.and_then(|(surface, app_id, _)| surface.maybe_surface().map(|wl| (wl, app_id)))
             // Check for layer-shell window focus.
             .or_else(|| self.layers.focus.clone())
     }
@@ -1231,6 +1442,17 @@ impl Windows {
     /// This will return the duration until the transaction should be timed out
     /// when there is an active transaction but it cannot be completed yet.
     pub fn update_transaction(&mut self) -> Option<Duration> {
+        if let Some((pgid, time, app_id)) = self.pending_resume.as_ref() {
+            let now = Instant::now();
+            if now >= *time {
+                unsafe { libc::kill(-pgid, libc::SIGCONT) };
+                info!("Executed delayed resume for pgid {}", pgid);
+                let app_id_ref = app_id.as_deref();
+                self.cork_app_audio(app_id_ref, false);
+                self.pending_resume = None;
+            }
+        }
+
         let start = TRANSACTION_START.load(Ordering::Relaxed);
         if start == 0 {
             // Even without an active transaction, apply liveliness changes to reap dead windows.
@@ -1261,6 +1483,13 @@ impl Windows {
 
             if self.dirty { }
 
+            if let Some((_, time, _)) = self.pending_resume {
+                let now = Instant::now();
+                if time > now {
+                    return Some(time - now);
+                }
+            }
+
             return None;
         }
 
@@ -1284,7 +1513,14 @@ impl Windows {
             // Abort if the transaction is still pending.
             if !finished {
                 let delta = timeout - elapsed;
-                return Some(Duration::from_millis(delta));
+                let t_rem = Duration::from_millis(delta);
+                if let Some((_, time, _)) = self.pending_resume {
+                    let now = Instant::now();
+                    if time > now {
+                        return Some(cmp::min(t_rem, time - now));
+                    }
+                }
+                return Some(t_rem);
             }
         } else {
             // Blacklist windows which caused transaction failure.

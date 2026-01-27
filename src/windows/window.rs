@@ -44,63 +44,33 @@ use crate::windows::surface::{CatacombLayerSurface, InputSurface, ShellSurface, 
 /// Wayland client window state.
 #[derive(Debug)]
 pub struct Window<S = ShellSurface> {
-    /// Last configure size acked by the client.
     pub acked_size: Size<i32, Logical>,
-
-    /// Whether the window should be excluded for keyboard focus.
     pub deny_focus: bool,
-
-    /// Attached surface.
     pub surface: S,
-
-    /// Application ID.
     pub app_id: Option<String>,
-
-    /// User attention request status.
     pub urgent: bool,
-
-    /// Buffers pending to be updated.
     dirty: bool,
-
-    /// Target bounds in the output's logical coordinates.
     output_rectangle: Rectangle<i32, Logical>,
-
-    /// Size in the window's logical coordinates.
     size: Size<i32, Logical>,
-
-    /// Texture cache, storing last window state.
     texture_cache: TextureCache,
-
-    /// Window is currently visible on the output.
     visible: bool,
-
-    /// Transaction for atomic upgrades.
     transaction: Option<WindowTransaction>,
-
-    /// Popup windows.
     popups: Vec<Window<PopupSurface>>,
-
-    /// Pending wp_presentation callbacks.
     presentation_callbacks: Vec<PresentationCallback>,
-
-    /// Window-specific scale override.
     scale: Option<WindowScale>,
-
-    /// Whether the window has proven unreliable for transactions.
     ignore_transactions: bool,
     ignore_transactions_locked: bool,
-
-    /// Window liveliness override.
     dead: bool,
+    pub process_group: Option<i32>,
 }
 
 impl<S: Surface + 'static> Window<S> {
-    /// Create a new Toplevel window.
     pub fn new(
         surface: S,
         output_scale: f64,
         surface_transform: Transform,
         app_id: Option<String>,
+        process_group: Option<i32>,
     ) -> Self {
         let window = Window {
             surface,
@@ -120,6 +90,7 @@ impl<S: Surface + 'static> Window<S> {
             scale: Default::default(),
             size: Default::default(),
             dead: Default::default(),
+            process_group,
         };
 
         // Ensure preferred integer scale and per-window layer shell scale are set.
