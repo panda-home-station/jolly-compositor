@@ -1114,6 +1114,9 @@ impl Catacomb {
 
     /// Poll gamepad events.
     pub fn poll_gamepad(_: Instant, _: &mut (), catacomb: &mut Self) -> TimeoutAction {
+        // Update windows pending state (suspend/resume)
+        catacomb.windows.update_pending_state();
+
         while let Some(event) = catacomb.gilrs.next_event() {
             catacomb.handle_gamepad_event(event);
         }

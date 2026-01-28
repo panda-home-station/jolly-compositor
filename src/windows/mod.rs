@@ -137,6 +137,8 @@ pub struct Windows {
     pending_launch: Option<LaunchCtx>,
     /// Pending resume for process group (PGID, ResumeTime, AppID).
     pending_resume: Option<(i32, Instant, Option<String>)>,
+    /// Pending suspend for process group (PGID, SuspendTime).
+    pending_suspend: Option<(i32, Instant)>,
     /// Role of the currently activated window (persisted even if window is destroyed).
     active_role: Option<String>,
     /// Last focused App ID (used for audio corking).
@@ -198,6 +200,7 @@ impl Windows {
             last_launch: Default::default(),
             pending_launch: Default::default(),
             pending_resume: None,
+            pending_suspend: None,
             active_role: None,
             last_focused_app_id: None,
             command_map: Default::default(),
@@ -1077,6 +1080,68 @@ impl Windows {
         }
     }
 
+    /// Update pending state (suspend/resume).
+    pub fn update_pending_state(&mut self) {
+        let now = Instant::now();
+        
+        // Handle pending suspend
+        if let Some((pgid, time)) = self.pending_suspend {
+            if now >= time {
+                info!("Executing delayed suspend for pgid {}", pgid);
+                unsafe { libc::kill(-pgid, libc::SIGSTOP) };
+                self.pending_suspend = None;
+            }
+        }
+        
+        // Handle pending resume
+        if let Some((pgid, time, app_id)) = self.pending_resume.clone() {
+             if now >= time {
+                 info!("Executing delayed resume for pgid {}", pgid);
+                 unsafe { libc::kill(-pgid, libc::SIGCONT) };
+                 self.cork_app_audio(app_id.as_deref(), false);
+                 self.control_media(app_id.as_deref(), false);
+                 self.pending_resume = None;
+             }
+        }
+    }
+
+    fn control_media(&self, app_id: Option<&str>, pause: bool) {
+        let app_id = match app_id {
+            Some(id) if !id.is_empty() => id.to_string(),
+            _ => return,
+        };
+        
+        let action = if pause { "pause" } else { "play" };
+        
+        // Spawn a background task to handle media control to avoid blocking compositor
+        std::thread::spawn(move || {
+            // Specific handling for known apps
+            if app_id.contains("jellyfin") {
+                 let _ = Command::new("playerctl")
+                    .arg("-p")
+                    .arg("jellyfinmediaplayer")
+                    .arg(action)
+                    .status();
+            }
+            
+            // Generic fallback: match player name
+            if let Ok(output) = Command::new("playerctl").arg("-l").output() {
+                 let stdout = String::from_utf8_lossy(&output.stdout);
+                 for player in stdout.lines() {
+                     let p_norm = player.to_lowercase();
+                     let a_norm = app_id.to_lowercase();
+                     if a_norm.contains(&p_norm) || p_norm.contains(&a_norm) {
+                         let _ = Command::new("playerctl")
+                            .arg("-p")
+                            .arg(player)
+                            .arg(action)
+                            .status();
+                     }
+                 }
+            }
+        });
+    }
+
     fn cork_app_audio(&self, app_id: Option<&str>, cork: bool) {
         let app_id = match app_id {
             Some(id) if !id.is_empty() => id,
@@ -1302,11 +1367,17 @@ impl Windows {
                 if let Some(window) = self.layouts.windows().find(|w| w.surface == *activated) {
                     if let Some(pgid) = window.process_group {
                         if pgid > 0 {
-                            unsafe { libc::kill(-pgid, libc::SIGSTOP) };
-                            info!("Suspended process group {}", pgid);
-
                             let app_id = window.app_id.as_deref();
+                            
+                            // 1. Mute Audio
                             self.cork_app_audio(app_id, true);
+                            
+                            // 2. Pause Media
+                            self.control_media(app_id, true);
+                            
+                            // 3. Schedule SIGSTOP (Delay 100ms)
+                            self.pending_suspend = Some((pgid, Instant::now() + Duration::from_millis(100)));
+                            info!("Scheduled suspend for pgid {} (100ms delay)", pgid);
                         }
                     }
                 }
@@ -1388,11 +1459,20 @@ impl Windows {
                                 self.pending_resume = Some((pgid, Instant::now() + Duration::from_millis(100), app_id));
                                 info!("Delayed resume for pgid {} (transient system role)", pgid);
                             } else {
+                                // Cancel pending suspend
+                                if let Some((p, _)) = self.pending_suspend {
+                                    if p == pgid {
+                                        self.pending_suspend = None;
+                                        info!("Cancelled pending suspend for pgid {}", pgid);
+                                    }
+                                }
+                                
                                 unsafe { libc::kill(-pgid, libc::SIGCONT) };
                                 info!("Resumed process group {}", pgid);
 
                                 let app_id = window.app_id.as_deref();
                                 self.cork_app_audio(app_id, false);
+                                self.control_media(app_id, false);
                             }
                         }
                     }
