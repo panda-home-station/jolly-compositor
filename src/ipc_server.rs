@@ -237,8 +237,14 @@ fn handle_message(buffer: &mut String, mut stream: UnixStream, catacomb: &mut Ca
             }
             if role == "overlay" && act == "back" {
                 if let Ok(app) = AppIdMatcher::try_from("JollyPad-Overlay".to_string()) {
-                    if catacomb.windows.toggle_app(app) {
-                        catacomb.unstall();
+                    // Only hide if currently active. Do not toggle on if inactive.
+                    let (title, current_id) = catacomb.windows.active_window_info().unwrap_or(("".to_string(), "".to_string()));
+                    let is_active = app.matches(Some(&current_id)) || app.matches(Some(&title));
+                    
+                    if is_active {
+                        if catacomb.windows.toggle_app(app) {
+                            catacomb.unstall();
+                        }
                     }
                 }
                 return;
