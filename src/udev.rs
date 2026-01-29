@@ -53,7 +53,7 @@ use smithay::reexports::wayland_server::protocol::wl_shm;
 use smithay::utils::{DevPath, DeviceFd, Logical, Physical, Point, Rectangle, Size, Transform};
 use smithay::wayland::dmabuf::{DmabufFeedback, DmabufFeedbackBuilder};
 use smithay::wayland::{dmabuf, shm};
-use tracing::{debug, error};
+use tracing::{debug, error, info};
 
 use crate::catacomb::Catacomb;
 use crate::drawing::{CatacombElement, Graphics};
@@ -226,6 +226,14 @@ impl Udev {
         trace_error!(self.session.change_vt(vt));
     }
 
+    /// Set the output mode.
+    pub fn set_mode(&mut self, mode: smithay::output::Mode) -> Result<(), Box<dyn Error>> {
+        if let Some(output_device) = &mut self.output_device {
+            output_device.set_mode(mode)?;
+        }
+        Ok(())
+    }
+
     /// Set output power saving state.
     pub fn set_display_status(&mut self, on: bool) {
         let output_device = match &mut self.output_device {
@@ -361,7 +369,7 @@ impl Udev {
         let _ = gles.bind_wl_display(display_handle);
 
         // Create the DRM compositor.
-        let drm_compositor = self
+        let (drm_compositor, connector) = self
             .create_drm_compositor(display_handle, windows, &gles, &mut drm, &gbm)
             .ok_or("drm compositor")?;
 
@@ -418,6 +426,7 @@ impl Udev {
             gbm,
             drm,
             id: device_id,
+            connector,
             screencopy: Default::default(),
         });
 
@@ -455,7 +464,7 @@ impl Udev {
         gles: &GlesRenderer,
         drm: &mut DrmDevice,
         gbm: &GbmDevice<DrmDeviceFd>,
-    ) -> Option<DrmCompositor> {
+    ) -> Option<(DrmCompositor, smithay::reexports::drm::control::connector::Handle)> {
         let formats = Bind::<Dmabuf>::supported_formats(gles)?;
         let resources = drm.resource_handles().ok()?;
 
@@ -466,10 +475,45 @@ impl Udev {
                 .filter(|conn| conn.state() == ConnectorState::Connected)
         })?;
         let modes = connector.modes();
-        let connector_mode = modes
-            .iter()
-            .find(|mode| mode.mode_type().contains(ModeTypeFlags::PREFERRED))
+
+        // Try to preserve existing mode if the output matches.
+        let output_name = format!("{:?}", connector.interface());
+        let current_mode = windows.output.canvas().physical_resolution();
+        let existing_name = windows.output.smithay_output().name();
+
+        let preserved_mode = if existing_name == output_name {
+            modes.iter().find(|m| {
+                let (w, h) = m.size();
+                // Match resolution and refresh rate (fuzzy match refresh if needed, but strict is safer for now)
+                w as i32 == current_mode.w && h as i32 == current_mode.h &&
+                (m.vrefresh() as i32 * 1000) == windows.output.canvas().frame_interval().as_millis() as i32 * 1000 // Approximate check?
+                // Actually windows.output.canvas().mode has the refresh rate directly.
+            })
+        } else {
+            None
+        };
+        
+        // If strict match fails, try resolution only match
+        let preserved_mode = preserved_mode.or_else(|| {
+             if existing_name == output_name {
+                modes.iter().find(|m| {
+                    let (w, h) = m.size();
+                    w as i32 == current_mode.w && h as i32 == current_mode.h
+                })
+             } else {
+                 None
+             }
+        });
+
+        let connector_mode = preserved_mode
+            .or_else(|| modes.iter().find(|mode| mode.mode_type().contains(ModeTypeFlags::PREFERRED)))
             .unwrap_or(modes.first()?);
+
+        if let Some(preserved) = preserved_mode {
+            tracing::info!("Preserving existing output mode: {:?}", preserved);
+        } else {
+            tracing::info!("Using default/preferred output mode: {:?}", connector_mode);
+        }
 
         // Create DRM surface.
         let surface = Self::create_surface(drm, resources, &connector, *connector_mode)?;
@@ -497,6 +541,16 @@ impl Udev {
             make: "Catacomb".into(),
         }));
 
+        // Add all available modes to the output
+        for drm_mode in modes {
+            let (width, height) = drm_mode.size();
+            let mode = Mode {
+                size: (width as i32, height as i32).into(),
+                refresh: drm_mode.vrefresh() as i32 * 1000,
+            };
+            windows.output.add_mode(mode);
+        }
+
         // Create the compositor.
         let output_mode_source: OutputModeSource = windows.canvas().into();
         DrmCompositor::new(
@@ -511,6 +565,7 @@ impl Udev {
             None,
         )
         .ok()
+        .map(|compositor| (compositor, connector.handle()))
     }
 
     /// Create DRM surface on the ideal CRTC.
@@ -556,11 +611,35 @@ pub struct OutputDevice {
     graphics: Graphics,
     drm: DrmDevice,
     id: DeviceId,
+    connector: smithay::reexports::drm::control::connector::Handle,
 
     token: RegistrationToken,
 }
 
 impl OutputDevice {
+    /// Set the output mode.
+    pub fn set_mode(&mut self, mode: smithay::output::Mode) -> Result<(), Box<dyn Error>> {
+        tracing::info!("Setting hardware mode to {}x{}@{}mHz", mode.size.w, mode.size.h, mode.refresh);
+        let connector_info = self.drm.get_connector(self.connector, false)?;
+        let drm_mode = connector_info
+            .modes()
+            .iter()
+            .find(|m| {
+                let (w, h) = m.size();
+                w as i32 == mode.size.w
+                    && h as i32 == mode.size.h
+                    && (m.vrefresh() as i32 * 1000) == mode.refresh
+            })
+            .ok_or("Mode not found")?;
+
+        tracing::info!("Found matching DRM mode: {:?}", drm_mode);
+        self.drm_compositor.surface().use_mode(*drm_mode)?;
+        
+        // Reset buffer ages to force full redraw and ensure new buffers are allocated for new size
+        self.drm_compositor.reset_buffer_ages();
+        Ok(())
+    }
+
     /// Get DRM property handle.
     fn get_drm_property(&self, name: &str) -> Result<PropertyHandle, io::Error> {
         let crtc = self.drm_compositor.crtc();

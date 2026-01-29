@@ -36,6 +36,7 @@ use crate::overview::{DragActionType, DragAndDrop, Overview};
 use crate::windows::layout::{LayoutPosition, Layouts};
 use crate::windows::surface::{CatacombLayerSurface, InputSurface, InputSurfaceKind, Surface, ShellSurface};
 use crate::windows::window::Window;
+use smithay::output::Mode;
 use std::collections::HashMap;
 use std::time::Instant as StdInstant;
 use serde::{Deserialize, Serialize};
@@ -130,7 +131,7 @@ pub struct Windows {
     transaction: Option<Transaction>,
     textures: Vec<CatacombElement>,
     start_time: Instant,
-    output: Output,
+    pub output: Output,
     system_roles: HashMap<String, AppIdMatcher>,
     last_launch: Option<(String, Instant)>,
     /// Pending launch context for mapping command/card to observed app_id.
@@ -216,6 +217,26 @@ impl Windows {
         if self.trace_scene_enabled {
             self.log_scene_stack();
         }
+    }
+
+    pub fn update_mode(&mut self, mode: Mode) {
+        info!("Windows: Updating mode to {}x{}@{}mHz", mode.size.w, mode.size.h, mode.refresh);
+        self.output.set_mode(mode);
+        self.canvas = *self.output.canvas();
+        
+        let new_size = self.canvas.size();
+        let scale = self.output.scale();
+        info!("Windows: Re-configuring windows to new size {:?}", new_size);
+        
+        for layout in self.layouts.layouts() {
+            if let Some(primary) = layout.primary() {
+                primary.borrow_mut().set_dimensions(scale, Rectangle::from_size(new_size));
+            }
+            if let Some(secondary) = layout.secondary() {
+                secondary.borrow_mut().set_dimensions(scale, Rectangle::from_size(new_size));
+            }
+        }
+        self.dirty = true;
     }
 
     fn log_scene_stack(&self) {

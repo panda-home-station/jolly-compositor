@@ -7,12 +7,12 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 
-use catacomb_ipc::{AppIdMatcher, CliToggle, IpcMessage, Keysym, WindowScale};
+use catacomb_ipc::{AppIdMatcher, CliToggle, IpcMessage, Keysym, OutputMode, WindowScale};
 use smithay::backend::input::KeyState;
 use smithay::input::keyboard::keysyms;
 use smithay::input::keyboard::XkbConfig;
 use smithay::reexports::calloop::LoopHandle;
-use tracing::{error, warn};
+use tracing::{error, info, warn};
 use libc;
 
 use crate::catacomb::Catacomb;
@@ -443,8 +443,62 @@ fn handle_message(buffer: &mut String, mut stream: UnixStream, catacomb: &mut Ca
         IpcMessage::DumpWindows => {
             catacomb.windows.log_window_tree();
         },
+        IpcMessage::GetOutputInfo => {
+            let canvas = catacomb.windows.canvas();
+            let physical = canvas.physical_resolution();
+            let (w, h) = (physical.w, physical.h);
+            let refresh = canvas.frame_interval();
+            // frame_interval is Duration; derive mHz from canvas.mode.refresh instead
+            let mhz = catacomb.windows.output.smithay_output().current_mode().map(|m| m.refresh).unwrap_or(canvas.frame_interval().as_millis() as i32);
+            let orientation = canvas.orientation();
+            let scale = canvas.scale();
+            send_reply(
+                &mut stream,
+                &IpcMessage::OutputInfo {
+                    width: w,
+                    height: h,
+                    refresh: mhz,
+                    scale,
+                    orientation,
+                },
+            );
+        },
+        IpcMessage::GetOutputModes => {
+            let modes = catacomb.windows.output.smithay_output().modes()
+                .into_iter()
+                .map(|m| OutputMode {
+                    width: m.size.w,
+                    height: m.size.h,
+                    refresh: m.refresh,
+                })
+                .collect();
+            send_reply(&mut stream, &IpcMessage::OutputModes { modes });
+        },
+        IpcMessage::SetOutputMode { mode } => {
+            info!("IPC: Received SetOutputMode request: {}x{} @ {}mHz", mode.width, mode.height, mode.refresh);
+            let target = catacomb.windows.output.smithay_output().modes()
+                .into_iter()
+                .find(|m| m.size.w == mode.width && m.size.h == mode.height && m.refresh == mode.refresh);
+            
+            if let Some(m) = target {
+                info!("IPC: Found matching mode: {:?}, updating logical state...", m);
+                catacomb.windows.update_mode(m);
+                info!("IPC: Logical mode updated to {:?}. Updating hardware state...", catacomb.windows.output.canvas().physical_resolution());
+                
+                if let Err(e) = catacomb.backend.set_mode(m) {
+                    error!("Failed to set hardware mode: {}", e);
+                } else {
+                    info!("IPC: Hardware mode set successfully.");
+                    // Force a redraw immediately to update the framebuffer to the new resolution
+                    catacomb.backend.schedule_redraw(std::time::Duration::ZERO);
+                }
+                catacomb.unstall();
+            } else {
+                warn!("ignoring invalid ipc message: SetOutputMode requested invalid mode: {:?}", mode);
+            }
+        },
         // Ignore IPC replies.
-        IpcMessage::DpmsReply { .. } | IpcMessage::ActiveWindow { .. } | IpcMessage::Clients { .. } => (),
+        IpcMessage::DpmsReply { .. } | IpcMessage::ActiveWindow { .. } | IpcMessage::Clients { .. } | IpcMessage::OutputInfo { .. } | IpcMessage::OutputModes { .. } => (),
     }
 }
 

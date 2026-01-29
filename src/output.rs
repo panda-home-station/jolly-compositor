@@ -91,6 +91,11 @@ impl Output {
         self.canvas.mode = mode;
     }
 
+    /// Add a mode to the list of available modes.
+    pub fn add_mode(&self, mode: Mode) {
+        self.output.add_mode(mode);
+    }
+
     /// Primary window dimensions.
     pub fn primary_rectangle(&self, secondary_visible: bool) -> Rectangle<i32, Logical> {
         let available = self.available();

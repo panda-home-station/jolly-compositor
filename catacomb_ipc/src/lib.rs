@@ -265,6 +265,75 @@ pub enum IpcMessage {
     },
     /// Dump current window tree to logs.
     DumpWindows,
+    /// Query current output information.
+    GetOutputInfo,
+    /// Reply with current output information.
+    #[cfg_attr(feature = "clap", clap(skip))]
+    OutputInfo {
+        /// Physical (native) resolution width.
+        width: i32,
+        /// Physical (native) resolution height.
+        height: i32,
+        /// Refresh rate in mHz (millihertz).
+        refresh: i32,
+        /// Current fractional scale factor.
+        scale: f64,
+        /// Current orientation.
+        orientation: Orientation,
+    },
+    /// Query supported output modes.
+    GetOutputModes,
+    /// Reply with supported output modes.
+    #[cfg_attr(feature = "clap", clap(skip))]
+    OutputModes {
+        modes: Vec<OutputMode>,
+    },
+    /// Set output mode.
+    SetOutputMode {
+        mode: OutputMode,
+    },
+}
+
+/// Output mode information.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OutputMode {
+    pub width: i32,
+    pub height: i32,
+    pub refresh: i32,
+}
+
+impl Display for OutputMode {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}x{}@{}mHz", self.width, self.height, self.refresh)
+    }
+}
+
+#[cfg(feature = "clap")]
+impl FromStr for OutputMode {
+    type Err = ClapError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let parts: Vec<&str> = s.split('@').collect();
+        if parts.is_empty() || parts.len() > 2 {
+             return Err(ClapError::raw(ClapErrorKind::InvalidValue, "invalid format, expected WxH@R"));
+        }
+
+        let dims: Vec<&str> = parts[0].split('x').collect();
+        if dims.len() != 2 {
+             return Err(ClapError::raw(ClapErrorKind::InvalidValue, "invalid dimension format, expected WxH"));
+        }
+
+        let width = i32::from_str(dims[0]).map_err(|_| ClapError::raw(ClapErrorKind::InvalidValue, "invalid width"))?;
+        let height = i32::from_str(dims[1]).map_err(|_| ClapError::raw(ClapErrorKind::InvalidValue, "invalid height"))?;
+
+        let refresh = if let Some(r) = parts.get(1) {
+             i32::from_str(r.trim_end_matches("mHz")).map_err(|_| ClapError::raw(ClapErrorKind::InvalidValue, "invalid refresh rate"))?
+        } else {
+             0
+        };
+
+        Ok(OutputMode { width, height, refresh })
+    }
 }
 
 /// Window client information.
