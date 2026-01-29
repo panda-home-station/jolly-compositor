@@ -1147,24 +1147,17 @@ impl Catacomb {
              GilrsEventType::ButtonPressed(button, _) => {
                   match button {
                      Button::Mode => {
-                          if active_role.is_some() || title.is_empty() {
-                              if let Ok(app) = AppIdMatcher::try_from("JollyPad-Overlay".to_string()) {
-                                  let toggled = self.windows.toggle_app(app);
-                                  if toggled {
-                                      self.note_input_event("overlay:toggle");
-                                      self.unstall();
-                                  } else {
-                                      let mods = ModifiersState::default();
-                                      let key = Keysym::BtnMode;
-                                      let state = KeyState::Pressed;
-                                      let _ = Self::handle_user_binding(self, &mods, key, state);
-                                  }
+                          if let Ok(app) = AppIdMatcher::try_from("JollyPad-Overlay".to_string()) {
+                              let toggled = self.windows.toggle_app(app);
+                              if toggled {
+                                  self.note_input_event("overlay:toggle");
+                                  self.unstall();
+                              } else {
+                                  let mods = ModifiersState::default();
+                                  let key = Keysym::BtnMode;
+                                  let state = KeyState::Pressed;
+                                  let _ = Self::handle_user_binding(self, &mods, key, state);
                               }
-                          } else {
-                              let mods = ModifiersState::default();
-                              let key = Keysym::BtnMode;
-                              let state = KeyState::Pressed;
-                              let _ = Self::handle_user_binding(self, &mods, key, state);
                           }
                       },
                     Button::DPadUp if allow_key_mapping => {
