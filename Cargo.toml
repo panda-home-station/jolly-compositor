@@ -8,8 +8,7 @@ rust-version = "1.85.0"
 license = "GPL-3.0"
 edition = "2024"
 
-[workspace]
-members = ["catacomb_ipc"]
+
 
 [features]
 default = []
