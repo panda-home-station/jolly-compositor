@@ -223,6 +223,11 @@ pub enum IpcMessage {
         /// App ID regex to match.
         app_id: String,
     },
+    /// Close a window by App ID.
+    CloseWindow {
+        /// App ID regex to match.
+        app_id: String,
+    },
     /// Register a system role mapping (e.g., home, nav, overlay).
     SystemRole {
         /// Role name, e.g., "home", "nav", "overlay".
@@ -343,6 +348,8 @@ pub struct ClientInfo {
     pub title: String,
     /// App ID.
     pub app_id: String,
+    /// Process ID.
+    pub pid: Option<i32>,
 }
 
 /// Device orientation.

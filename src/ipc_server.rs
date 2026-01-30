@@ -203,6 +203,19 @@ fn handle_message(buffer: &mut String, mut stream: UnixStream, catacomb: &mut Ca
                 catacomb.unstall();
             }
         },
+        IpcMessage::CloseWindow { app_id } => {
+            let app_id = match AppIdMatcher::try_from(app_id) {
+                Ok(app_id) => app_id,
+                Err(err) => {
+                    warn!("ignoring invalid ipc message: close has invalid App ID regex: {err}");
+                    return;
+                },
+            };
+
+            if catacomb.windows.close_app(app_id) {
+                catacomb.unstall();
+            }
+        },
         IpcMessage::SystemRole { role, app_id } => {
             let app_id = match AppIdMatcher::try_from(app_id) {
                 Ok(app_id) => app_id,

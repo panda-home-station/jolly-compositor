@@ -633,8 +633,25 @@ impl Windows {
             .map(|window| ClientInfo {
                 title: window.title().unwrap_or_default(),
                 app_id: window.xdg_app_id().or(window.app_id.clone()).unwrap_or_default(),
+                pid: window.process_group,
             })
             .collect()
+    }
+
+    /// Close an application by App ID.
+    pub fn close_app(&mut self, app_id: AppIdMatcher) -> bool {
+        let mut closed = false;
+        for mut window in self.layouts.windows_mut() {
+            let t = window.title().unwrap_or_default();
+            let xdg_id = window.xdg_app_id().unwrap_or_default();
+            let w_app_id = window.app_id.clone().unwrap_or_default();
+            
+            if app_id.matches(Some(&w_app_id)) || app_id.matches(Some(&t)) || app_id.matches(Some(&xdg_id)) {
+                window.kill();
+                closed = true;
+            }
+        }
+        closed
     }
 
     pub fn note_launch_context(
