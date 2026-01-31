@@ -294,7 +294,12 @@ impl Canvas {
 
     /// Duration between frames.
     pub fn frame_interval(&self) -> Duration {
-        Duration::from_nanos(1_000_000_000_000 / self.mode.refresh as u64)
+        if self.mode.refresh == 0 {
+            // Default to 60Hz if refresh is 0 to avoid divide-by-zero panic
+            Duration::from_nanos(16_666_666)
+        } else {
+            Duration::from_nanos(1_000_000_000_000 / self.mode.refresh as u64)
+        }
     }
 }
 

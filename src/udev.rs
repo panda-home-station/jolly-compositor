@@ -503,6 +503,11 @@ impl Udev {
             mod_val == 0 
         }).collect();
         
+        tracing::info!("DEBUG: Total formats: {}, Linear formats: {}", formats.len(), linear_formats.len());
+        if formats.len() > 0 {
+             tracing::info!("DEBUG: First format modifier: {:?}", formats[0].modifier);
+        }
+
         if !linear_formats.is_empty() {
             formats = linear_formats;
         } else {
@@ -526,21 +531,107 @@ impl Udev {
         tracing::info!("Found {} connectors", resources.connectors().len());
 
         // Find the first connected output port.
-        let mut connector = resources.connectors().iter().find_map(|conn| {
-            match drm.get_connector(*conn, true) {
-                Ok(c) => {
-                    if c.state() == ConnectorState::Connected {
-                        Some(c)
-                    } else {
+        // RETRY LOOP: Wait for valid modes (HDMI handshake can be slow on cold boot)
+        let mut connector = None;
+        let retry_count = 60; // Increased to 60 (30 seconds) for slow TV cold boots
+        
+        for attempt in 1..=retry_count {
+            // Refresh resources on each attempt to get latest connector state
+            let current_resources = match drm.resource_handles() {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::warn!("Failed to refresh resources: {:?}", e);
+                    resources.clone() // Fallback to initial resources
+                }
+            };
+
+            tracing::info!("🔄 Attempt {}/{} Checking connectors...", attempt, retry_count);
+            
+            let found = current_resources.connectors().iter().find_map(|conn| {
+                match drm.get_connector(*conn, true) {
+                    Ok(c) => {
+                        let state = c.state();
+                        let interface = format!("{:?}", c.interface());
+                        let modes = c.modes();
+                        let max_width = modes.iter().map(|m| m.size().0).max().unwrap_or(0);
+                        
+                        // Enhanced Logging requested by user
+                        tracing::info!("   🔌 Connector {:?} ({}) State: {:?}", conn, interface, state);
+                        
+                        if state == ConnectorState::Connected {
+                            tracing::info!("      Found {} modes. Max Width: {}", modes.len(), max_width);
+                            if modes.is_empty() {
+                                tracing::warn!("      ⚠️ Connected but NO modes found!");
+                            } else {
+                                for (idx, m) in modes.iter().take(5).enumerate() {
+                                    tracing::info!("      Mode[{}]: {}x{} @ {:.2}Hz", idx, m.size().0, m.size().1, m.vrefresh() as f32 / 1000.0);
+                                }
+                            }
+
+                            // Try to log EDID presence
+                            if let Ok(props) = drm.get_properties(c.handle()) {
+                                let (handles, _values) = props.as_props_and_values();
+                                for handle in handles {
+                                    if let Ok(info) = drm.get_property(*handle) {
+                                        if info.name().to_str().unwrap_or("") == "EDID" {
+                                            tracing::info!("      ✅ EDID Property detected on this connector.");
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        if state == ConnectorState::Connected {
+                            // Check if modes are plausible (e.g. not just 640x480 safe mode)
+                            if max_width >= 1920 {
+                                Some(c)
+                            } else {
+                                tracing::warn!("      ⚠️ Connector {:?} connected but max width {} < 1920. Waiting...", conn, max_width);
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    },
+                    Err(e) => {
+                        tracing::error!("Failed to get connector info: {:?}", e);
                         None
                     }
-                },
-                Err(e) => {
-                    tracing::error!("Failed to get connector info: {:?}", e);
-                    None
                 }
+            });
+
+            if found.is_some() {
+                connector = found;
+                tracing::info!("✅ Found valid connector with high-res modes!");
+                break;
             }
-        });
+            
+            if attempt < retry_count {
+                tracing::info!("⏳ Waiting for HDMI handshake / High-res modes... (Attempt {}/{})", attempt, retry_count);
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+        }
+        
+        // Fallback: If retry failed, try to get ANY connected connector (even low res)
+        if connector.is_none() {
+             tracing::warn!("⚠️ High-res retry loop failed. Falling back to ANY connected connector.");
+             
+             // Refresh resources one last time
+             let current_resources = match drm.resource_handles() {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::warn!("Failed to refresh resources for fallback: {:?}", e);
+                    resources.clone()
+                }
+             };
+
+             connector = current_resources.connectors().iter().find_map(|conn| {
+                match drm.get_connector(*conn, true) {
+                    Ok(c) => if c.state() == ConnectorState::Connected { Some(c) } else { None },
+                    Err(_) => None
+                }
+            });
+        }
 
         // Fallback: If no connected port, try to find ANY HDMI/DP port
         if connector.is_none() {
@@ -578,12 +669,14 @@ impl Udev {
                     let name = info.name().to_str().unwrap_or("unknown");
                     
                     if name == "Colorspace" {
-                         // Reset to Default (0) to avoid breaking RGB modes or if 10 is not supported.
-                         // We rely on the Mode Flag (0x8000) to trigger YUV420.
-                         let target_value = 0u64;
+                         // Force BT2020_YCC (10) to support 4K@60Hz YUV420 on HDMI 2.0
+                         // This is often required alongside the YCbCr420_ONLY mode flag.
+                         let target_value = 10u64;
                          
                          if let Err(e) = drm.set_property(connector_handle, *handle, target_value.into()) {
-                             tracing::warn!("Failed to set 'Colorspace' to 0: {:?}", e);
+                             tracing::warn!("Failed to set 'Colorspace' to 10: {:?}", e);
+                         } else {
+                             tracing::info!("✅ Set 'Colorspace' to 10 (BT2020_YCC)");
                          }
                     }
 
@@ -674,8 +767,40 @@ impl Udev {
         for (attempt, attempted_mode) in unique_candidates.iter().enumerate() {
             tracing::info!("🚀 Attempting Mode #{}: {:?}", attempt, attempted_mode);
 
+            // 1. Prepare Mode (Hack for 4K Bandwidth)
+            let mut mode_to_use = *attempted_mode;
+            
+            // FIX: Force YCbCr420_ONLY (0x8000) for 4K modes to fit HDMI 2.0 bandwidth
+            // This prevents "Invalid Argument" errors on NVIDIA/Atomic when using 4K@60Hz.
+            if mode_to_use.size().0 == 3840 && mode_to_use.size().1 == 2160 {
+                 // 0x8000 is DRM_MODE_FLAG_YCbCr420_ONLY
+                 const DRM_MODE_FLAG_YCBCR420_ONLY: u32 = 0x8000;
+                 
+                 // Hack to modify private fields of DrmMode (which wraps drm_mode_modeinfo)
+                 // Structure layout of drm_mode_modeinfo:
+                 // u32 clock;
+                 // u16 hdisplay, hsync_start, hsync_end, htotal, hskew; (5 * 2 = 10 bytes)
+                 // u16 vdisplay, vsync_start, vsync_end, vtotal, vscan; (5 * 2 = 10 bytes)
+                 // u32 vrefresh;
+                 // u32 flags;  <-- Offset = 4 + 10 + 10 + 4 = 28 bytes.
+                 
+                 unsafe {
+                      let ptr = &mut mode_to_use as *mut DrmMode as *mut u8;
+                      let flags_ptr = ptr.add(28) as *mut u32;
+                      let current_flags = *flags_ptr;
+                      
+                      tracing::info!("DEBUG: 4K Mode Flags Check. Current: 0x{:x}, Target: 0x{:x}", current_flags, current_flags | DRM_MODE_FLAG_YCBCR420_ONLY);
+                      
+                      // Only add if not present
+                      if (current_flags & DRM_MODE_FLAG_YCBCR420_ONLY) == 0 {
+                         *flags_ptr = current_flags | DRM_MODE_FLAG_YCBCR420_ONLY;
+                         tracing::info!("🔧 Forced YCbCr420_ONLY (0x8000) for 4K mode. Old flags: 0x{:x}, New flags: 0x{:x}", current_flags, *flags_ptr);
+                      }
+                  }
+            }
+
             // 1. Create Surface
-            let surface_opt = Self::create_surface(drm, resources.clone(), &connector, *attempted_mode);
+            let surface_opt = Self::create_surface(drm, resources.clone(), &connector, mode_to_use);
             
             if surface_opt.is_none() {
                 tracing::warn!("❌ Failed to create surface for mode #{}. Skipping.", attempt);
