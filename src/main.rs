@@ -57,6 +57,7 @@ pub fn main() {
     );
     let env_filter = EnvFilter::builder().parse_lossy(directives);
     FmtSubscriber::builder().with_env_filter(env_filter).with_line_number(true).init();
+    tracing::info!("🚀 Catacomb v1.0.6 starting...");
 
     match Options::parse().subcommands {
         Some(Subcommands::Msg(msg)) => match catacomb_ipc::send_message(&msg) {

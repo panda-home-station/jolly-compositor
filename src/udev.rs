@@ -72,9 +72,15 @@ const DRM_RETRY_DELAY: Duration = Duration::from_millis(250);
 ///
 /// These are formats supported by most devices which have at least 8 bits per
 /// channel, to ensure we're not falling back to reduced color palettes.
-const SUPPORTED_COLOR_FORMATS: &[Fourcc] = &[Fourcc::Argb8888, Fourcc::Abgr8888];
+const SUPPORTED_COLOR_FORMATS: &[Fourcc] = &[
+    Fourcc::Argb8888,
+    Fourcc::Abgr8888,
+    Fourcc::Xrgb8888,
+    Fourcc::Xbgr8888,
+];
 
 pub fn run() {
+    tracing::info!("🚀 Catacomb UDEV starting");
     // Disable ARM framebuffer compression formats.
     //
     // This is necessary due to a driver bug which causes random artifacts to show
@@ -94,12 +100,18 @@ pub fn run() {
     }
 
     // Setup hardware acceleration.
-    let dmabuf_feedback =
-        catacomb.backend.default_dmabuf_feedback(&backend).expect("dmabuf feedback");
-    catacomb.dmabuf_state.create_global_with_default_feedback::<Catacomb>(
-        &catacomb.display_handle,
-        &dmabuf_feedback,
-    );
+    match catacomb.backend.default_dmabuf_feedback(&backend) {
+        Ok(dmabuf_feedback) => {
+             catacomb.dmabuf_state.create_global_with_default_feedback::<Catacomb>(
+                &catacomb.display_handle,
+                &dmabuf_feedback,
+            );
+        },
+        Err(e) => {
+            tracing::warn!("⚠️ Failed to initialize default dmabuf feedback (no output device?): {}", e);
+            tracing::warn!("⚠️ Service will continue running to wait for hotplug events...");
+        }
+    }
 
     // Handle device events.
     event_loop
@@ -135,8 +147,14 @@ fn add_device(catacomb: &mut Catacomb, path: PathBuf) {
 
     // Kick-off rendering if the device creation was successful.
     match result {
-        Ok(()) => catacomb.create_frame(),
-        Err(err) => debug!("{err}"),
+        Ok(()) => {
+            tracing::info!("✅ Device added successfully, starting frame creation.");
+            catacomb.create_frame()
+        },
+        Err(err) => {
+            tracing::error!("❌ Failed to add device: {}", err);
+            tracing::error!("This is likely why the system panics later with 'missing output device'.");
+        },
     }
 }
 
@@ -465,15 +483,119 @@ impl Udev {
         drm: &mut DrmDevice,
         gbm: &GbmDevice<DrmDeviceFd>,
     ) -> Option<(DrmCompositor, smithay::reexports::drm::control::connector::Handle)> {
-        let formats = Bind::<Dmabuf>::supported_formats(gles)?;
-        let resources = drm.resource_handles().ok()?;
+        let formats_group = match Bind::<Dmabuf>::supported_formats(gles) {
+            Some(f) => f,
+            None => {
+                tracing::error!("Failed to get supported formats: returns None");
+                return None;
+            }
+        };
+
+        // FILTER: Force Linear modifier only to avoid AFBC issues causing Invalid Argument errors
+        // Convert to Vec to allow filtering and passing to DrmCompositor
+        let mut formats: Vec<_> = formats_group.into_iter().collect();
+        
+        let linear_formats: Vec<_> = formats.iter().cloned().filter(|f| {
+            let mod_val = u64::from(f.modifier);
+            // 0 = Linear
+            // 72057594037927935 (0x00ffffffffffffff) = Invalid (Implicit/Legacy)
+            // STRICT FILTER: Only allow explicit LINEAR (0). 'Invalid' (Implicit) can fail on NVIDIA with Atomic.
+            mod_val == 0 
+        }).collect();
+        
+        if !linear_formats.is_empty() {
+            formats = linear_formats;
+        } else {
+            tracing::warn!("⚠️ No LINEAR/INVALID formats found! Falling back to using ALL available formats (AFBC might be enabled).");
+        }
+
+
+        if formats.is_empty() {
+             tracing::error!("❌ No formats supported at all! This is fatal.");
+             return None;
+        }
+
+        let resources = match drm.resource_handles() {
+            Ok(r) => r,
+            Err(e) => {
+                 tracing::error!("Failed to get DRM resource handles: {:?}", e);
+                 return None;
+            }
+        };
+
+        tracing::info!("Found {} connectors", resources.connectors().len());
 
         // Find the first connected output port.
-        let connector = resources.connectors().iter().find_map(|conn| {
-            drm.get_connector(*conn, true)
-                .ok()
-                .filter(|conn| conn.state() == ConnectorState::Connected)
-        })?;
+        let mut connector = resources.connectors().iter().find_map(|conn| {
+            match drm.get_connector(*conn, true) {
+                Ok(c) => {
+                    if c.state() == ConnectorState::Connected {
+                        Some(c)
+                    } else {
+                        None
+                    }
+                },
+                Err(e) => {
+                    tracing::error!("Failed to get connector info: {:?}", e);
+                    None
+                }
+            }
+        });
+
+        // Fallback: If no connected port, try to find ANY HDMI/DP port
+        if connector.is_none() {
+             tracing::warn!("⚠️ No CONNECTED port found. Falling back to first available HDMI/DP port...");
+             connector = resources.connectors().iter().find_map(|conn| {
+                 match drm.get_connector(*conn, true) {
+                    Ok(c) => {
+                         let name = format!("{:?}", c.interface());
+                         if name.contains("HDMI") || name.contains("DisplayPort") {
+                             Some(c)
+                         } else {
+                             None
+                         }
+                    }
+                    Err(_) => None
+                 }
+             });
+        }
+
+        if connector.is_none() {
+             tracing::error!("❌ No connected connector found and fallback failed!");
+             return None;
+        }
+        let connector = connector.unwrap();
+
+        // HACK: Force "max bpc" to 8 to enable 4K@60Hz YUV420
+        // This is required because some drivers/cables fail to negotiate high bandwidth RGB,
+        // and forcing 8bpc allows the driver to fall back to YUV420 which fits in HDMI 2.0 bandwidth.
+        
+        let connector_handle = connector.handle();
+        if let Ok(props) = drm.get_properties(connector_handle) {
+            let (handles, values) = props.as_props_and_values();
+            for (i, handle) in handles.iter().enumerate() {
+                if let Ok(info) = drm.get_property(*handle) {
+                    let name = info.name().to_str().unwrap_or("unknown");
+                    
+                    if name == "Colorspace" {
+                         // Reset to Default (0) to avoid breaking RGB modes or if 10 is not supported.
+                         // We rely on the Mode Flag (0x8000) to trigger YUV420.
+                         let target_value = 0u64;
+                         
+                         if let Err(e) = drm.set_property(connector_handle, *handle, target_value.into()) {
+                             tracing::warn!("Failed to set 'Colorspace' to 0: {:?}", e);
+                         }
+                    }
+
+                    if name == "max bpc" {
+                        if let Err(e) = drm.set_property(connector_handle, *handle, 8u64.into()) {
+                             tracing::warn!("Failed to set 'max bpc': {:?}", e);
+                        }
+                    }
+                }
+            }
+        }
+
         let modes = connector.modes();
 
         // Try to preserve existing mode if the output matches.
@@ -505,67 +627,132 @@ impl Udev {
              }
         });
 
-        let connector_mode = preserved_mode
-            .or_else(|| modes.iter().find(|mode| mode.mode_type().contains(ModeTypeFlags::PREFERRED)))
-            .unwrap_or(modes.first()?);
+        let best_existing_mode = preserved_mode
+            .or_else(|| {
+                // Find the preferred mode (usually native resolution)
+                let preferred = modes.iter().find(|mode| mode.mode_type().contains(ModeTypeFlags::PREFERRED));
+                
+                if let Some(preferred) = preferred {
+                    // Try to find a mode with the same resolution but higher refresh rate
+                    let (w, h) = preferred.size();
+                    modes.iter()
+                         .filter(|m| m.size() == (w, h))
+                         .max_by_key(|m| m.vrefresh())
+                         .or(Some(preferred)) // Fallback to preferred if something goes wrong
+                 } else {
+                     modes.first()
+                 }
+            });
 
-        if let Some(preserved) = preserved_mode {
-            tracing::info!("Preserving existing output mode: {:?}", preserved);
-        } else {
-            tracing::info!("Using default/preferred output mode: {:?}", connector_mode);
+        // === MODE SELECTION ===
+        let mut candidates: Vec<DrmMode> = modes.to_vec();
+        
+        // Sort: Preferred first, then by refresh rate descending
+        candidates.sort_by(|a, b| {
+            let a_pref = a.mode_type().contains(ModeTypeFlags::PREFERRED);
+            let b_pref = b.mode_type().contains(ModeTypeFlags::PREFERRED);
+            match (a_pref, b_pref) {
+                (true, false) => std::cmp::Ordering::Less,
+                (false, true) => std::cmp::Ordering::Greater,
+                _ => b.vrefresh().cmp(&a.vrefresh()),
+            }
+        });
+
+        // Simple dedup
+        let mut unique_candidates = Vec::new();
+        for m in candidates {
+            if !unique_candidates.contains(&m) {
+                unique_candidates.push(m);
+            }
+        }
+        
+        tracing::info!("Candidate Modes for Attempt:");
+        for (i, m) in unique_candidates.iter().enumerate() {
+            tracing::info!("  [#{}] {}x{} @ {:.2}Hz (Flags: 0x{:x})", i, m.size().0, m.size().1, m.vrefresh() as f32 / 1000.0, m.flags().bits());
         }
 
-        // Create DRM surface.
-        let surface = Self::create_surface(drm, resources, &connector, *connector_mode)?;
+        for (attempt, attempted_mode) in unique_candidates.iter().enumerate() {
+            tracing::info!("🚀 Attempting Mode #{}: {:?}", attempt, attempted_mode);
 
-        // Create GBM allocator.
-        let gbm_flags = GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT;
-        let allocator = GbmAllocator::new(gbm.clone(), gbm_flags);
+            // 1. Create Surface
+            let surface_opt = Self::create_surface(drm, resources.clone(), &connector, *attempted_mode);
+            
+            if surface_opt.is_none() {
+                tracing::warn!("❌ Failed to create surface for mode #{}. Skipping.", attempt);
+                continue;
+            }
+            let surface = surface_opt.unwrap();
 
-        let (width, height) = connector_mode.size();
-        let mode = Mode {
-            size: (width as i32, height as i32).into(),
-            refresh: connector_mode.vrefresh() as i32 * 1000,
-        };
+            // 2. Create Allocator
+            let gbm_flags = GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT;
+            let allocator = GbmAllocator::new(gbm.clone(), gbm_flags);
 
-        // Update the output mode.
-
-        let (physical_width, physical_height) = connector.size().unwrap_or((0, 0));
-        let output_name = format!("{:?}", connector.interface());
-
-        windows.set_output(Output::new(display, output_name, mode, PhysicalProperties {
-            size: (physical_width as i32, physical_height as i32).into(),
-            subpixel: Subpixel::Unknown,
-            serial_number: "Unknown".into(),
-            model: "Generic DRM".into(),
-            make: "Catacomb".into(),
-        }));
-
-        // Add all available modes to the output
-        for drm_mode in modes {
-            let (width, height) = drm_mode.size();
+            // 3. Prepare Output Mode for Compositor
+            let (width, height) = attempted_mode.size();
             let mode = Mode {
                 size: (width as i32, height as i32).into(),
-                refresh: drm_mode.vrefresh() as i32 * 1000,
+                refresh: attempted_mode.vrefresh() as i32 * 1000,
             };
-            windows.output.add_mode(mode);
-        }
 
-        // Create the compositor.
-        let output_mode_source: OutputModeSource = windows.canvas().into();
-        DrmCompositor::new(
-            output_mode_source,
-            surface,
-            None,
-            allocator,
-            GbmFramebufferExporter::new(gbm.clone(), NodeFilter::All),
-            SUPPORTED_COLOR_FORMATS.iter().copied(),
-            formats,
-            Size::default(),
-            None,
-        )
-        .ok()
-        .map(|compositor| (compositor, connector.handle()))
+            // Update Windows Output (temporary, confirmed if success)
+            let (physical_width, physical_height) = connector.size().unwrap_or((0, 0));
+            let output_name = format!("{:?}", connector.interface());
+            
+            // Note: We modify `windows` here, but if it fails we overwrite it next loop.
+            // Ideally we should only update windows on success, but `DrmCompositor::new` needs `output_mode_source` from windows?
+            // `output_mode_source` is `windows.canvas().into()`.
+            // So we MUST update windows before creating compositor.
+            
+            windows.set_output(Output::new(display, output_name, mode, PhysicalProperties {
+                size: (physical_width as i32, physical_height as i32).into(),
+                subpixel: Subpixel::Unknown,
+                serial_number: "Unknown".into(),
+                model: "Generic DRM".into(),
+                make: "Catacomb".into(),
+            }));
+            
+            // Add modes to output
+             for drm_mode in modes.iter() {
+                let (w, h) = drm_mode.size();
+                let m = Mode {
+                    size: (w as i32, h as i32).into(),
+                    refresh: drm_mode.vrefresh() as i32 * 1000,
+                };
+                windows.output.add_mode(m);
+            }
+
+            // 4. Create Compositor (This triggers Atomic Commit!)
+            let output_mode_source: OutputModeSource = windows.canvas().into();
+            
+            // Re-create formats iterator for each attempt (it was consumed? No, `formats` is Vec, we can iterate)
+            // But `DrmCompositor::new` takes `impl IntoIterator`. `formats.clone()` works.
+            
+            let res = DrmCompositor::new(
+                output_mode_source,
+                surface,
+                None,
+                allocator,
+                GbmFramebufferExporter::new(gbm.clone(), NodeFilter::All),
+                SUPPORTED_COLOR_FORMATS.iter().copied(),
+                formats.clone(), 
+                Size::default(),
+                None,
+            );
+
+            match res {
+                Ok(compositor) => {
+                    tracing::info!("✅ Successfully created DrmCompositor with mode #{}: {:?}", attempt, attempted_mode);
+                    return Some((compositor, connector.handle()));
+                },
+                Err(e) => {
+                    tracing::error!("❌ Mode-setting failed for mode #{}: {:?}", attempt, e);
+                    tracing::warn!("Retrying with next candidate...");
+                }
+            }
+        }
+        
+        tracing::error!("❌ All candidate modes failed! Cannot initialize DRM compositor.");
+        None
     }
 
     /// Create DRM surface on the ideal CRTC.
@@ -621,7 +808,8 @@ impl OutputDevice {
     pub fn set_mode(&mut self, mode: smithay::output::Mode) -> Result<(), Box<dyn Error>> {
         tracing::info!("Setting hardware mode to {}x{}@{}mHz", mode.size.w, mode.size.h, mode.refresh);
         let connector_info = self.drm.get_connector(self.connector, false)?;
-        let drm_mode = connector_info
+        
+        let found_mode = connector_info
             .modes()
             .iter()
             .find(|m| {
@@ -630,10 +818,16 @@ impl OutputDevice {
                     && h as i32 == mode.size.h
                     && (m.vrefresh() as i32 * 1000) == mode.refresh
             })
-            .ok_or("Mode not found")?;
+            .copied();
 
-        tracing::info!("Found matching DRM mode: {:?}", drm_mode);
-        self.drm_compositor.surface().use_mode(*drm_mode)?;
+        let drm_mode = if let Some(m) = found_mode {
+            m
+        } else {
+             return Err("Mode not found".into());
+        };
+
+        tracing::info!("Using DRM mode: {:?}", drm_mode);
+        self.drm_compositor.surface().use_mode(drm_mode)?;
         
         // Reset buffer ages to force full redraw and ensure new buffers are allocated for new size
         self.drm_compositor.reset_buffer_ages();
@@ -939,3 +1133,5 @@ type DrmCompositor = SmithayDrmCompositor<
     (),
     DrmDeviceFd,
 >;
+
+
