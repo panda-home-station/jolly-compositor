@@ -7,14 +7,14 @@ use std::rc::{Rc, Weak};
 use std::sync::atomic::{self, AtomicU64};
 
 use tracing::info;
-use crate::windows::surface::{ShellSurface, Surface};
+use crate::shell::windows::surface::{ShellSurface, Surface};
 
 use smithay::utils::{Logical, Point};
 
 
-use crate::drawing::CatacombElement;
-use crate::windows::surface::InputSurfaceKind;
-use crate::windows::{self, InputSurface, Output, Window, WlSurface};
+use crate::output::drawing::CatacombElement;
+use crate::shell::windows::surface::InputSurfaceKind;
+use crate::shell::windows::{self, InputSurface, Output, Window, WlSurface};
 
 /// Default layout as const for borrowing purposes.
 const DEFAULT_LAYOUT: Layout = Layout { primary: None, secondary: None, id: LayoutId(0) };

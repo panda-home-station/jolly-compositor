@@ -15,9 +15,9 @@ use smithay::reexports::calloop::LoopHandle;
 use tracing::{error, info, warn};
 use libc;
 
-use crate::catacomb::Catacomb;
+use crate::state::Catacomb;
 use crate::config::{GestureBinding, GestureBindingAction, KeyBinding};
-use crate::socket::SocketSource;
+use crate::backend::socket::SocketSource;
 
 /// Create an IPC socket.
 pub fn spawn_ipc_socket(

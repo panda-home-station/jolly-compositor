@@ -4,8 +4,8 @@ use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Point};
 use smithay::wayland::shell::wlr_layer::Layer;
 
-use crate::windows::surface::{CatacombLayerSurface, InputSurface};
-use crate::windows::window::Window;
+use crate::shell::windows::surface::{CatacombLayerSurface, InputSurface};
+use crate::shell::windows::window::Window;
 
 type LayerWindow = Window<CatacombLayerSurface>;
 

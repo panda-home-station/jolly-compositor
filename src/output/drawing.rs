@@ -23,7 +23,7 @@ use smithay::wayland::compositor::{
 };
 use smithay::wayland::viewporter::{self, ViewportCachedState};
 
-use crate::geometry::SubtractRectFast;
+use crate::utils::geometry::SubtractRectFast;
 use crate::output::{Canvas, GESTURE_HANDLE_HEIGHT};
 
 /// Color of the hovered overview tiling location highlight.

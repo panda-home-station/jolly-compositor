@@ -9,7 +9,7 @@ use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::Sta
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Point, Rectangle, Size};
 
-use crate::drawing::CatacombSurfaceData;
+use crate::output::drawing::CatacombSurfaceData;
 use smithay::wayland::compositor;
 use smithay::wayland::session_lock::{LockSurface, LockSurfaceState};
 use smithay::wayland::shell::wlr_layer::{
@@ -19,9 +19,9 @@ use smithay::wayland::shell::xdg::{
     PopupState, PopupSurface, SurfaceCachedState, ToplevelState, ToplevelSurface,
     XdgPopupSurfaceData, XdgToplevelSurfaceData, XdgToplevelSurfaceRoleAttributes,
 };
-use crate::xwayland::X11Surface;
+use crate::shell::xwayland::X11Surface;
 
-use crate::windows::Window;
+use crate::shell::windows::Window;
 
 /// Common surface functionality.
 pub trait Surface {

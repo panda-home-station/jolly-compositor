@@ -35,11 +35,11 @@ use smithay::wayland::shell::xdg::{
 use smithay::wayland::{fractional_scale, single_pixel_buffer};
 use tracing::error;
 
-use crate::drawing::{CatacombElement, CatacombSurfaceData, RenderTexture, Texture};
-use crate::geometry::Vector;
+use crate::output::drawing::{CatacombElement, CatacombSurfaceData, RenderTexture, Texture};
+use crate::utils::geometry::Vector;
 use crate::output::{ExclusiveSpace, Output};
-use crate::windows;
-use crate::windows::surface::{CatacombLayerSurface, InputSurface, ShellSurface, Surface};
+use crate::shell::windows;
+use crate::shell::windows::surface::{CatacombLayerSurface, InputSurface, ShellSurface, Surface};
 
 /// Wayland client window state.
 #[derive(Debug)]

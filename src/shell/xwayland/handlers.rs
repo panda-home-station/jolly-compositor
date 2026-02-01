@@ -5,7 +5,7 @@ use smithay::xwayland::xwm::{ResizeEdge, XwmId};
 use smithay::xwayland::{X11Surface, X11Wm, XwmHandler};
 use tracing::info;
 
-use crate::catacomb::Catacomb;
+use crate::state::Catacomb;
 
 impl XWaylandShellHandler for Catacomb {
     fn xwayland_shell_state(&mut self) -> &mut XWaylandShellState {

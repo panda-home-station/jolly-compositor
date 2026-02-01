@@ -18,13 +18,13 @@ use smithay::utils::{Logical, Point, Rectangle, SERIAL_COUNTER};
 use smithay::wayland::compositor;
 use tracing::error;
 
-use crate::catacomb::Catacomb;
+use crate::state::Catacomb;
 use crate::config::{GestureBinding, GestureBindingAction};
 use crate::daemon;
-use crate::drawing::CatacombSurfaceData;
-use crate::orientation::Orientation;
+use crate::output::drawing::CatacombSurfaceData;
+use crate::output::orientation::Orientation;
 use crate::output::{Canvas, GESTURE_HANDLE_HEIGHT};
-use crate::windows::surface::{InputSurface, InputSurfaceKind};
+use crate::shell::windows::surface::{InputSurface, InputSurfaceKind};
 
 /// Time before a tap is considered a hold.
 pub const HOLD_DURATION: Duration = Duration::from_secs(1);

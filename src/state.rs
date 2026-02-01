@@ -90,16 +90,17 @@ use smithay::{
 use tracing::{error, info};
 
 use crate::config::KeyBinding;
-use crate::drawing::CatacombSurfaceData;
+use crate::output::drawing::CatacombSurfaceData;
 use crate::input::{REPEAT_DELAY, REPEAT_RATE, TouchState};
-use crate::orientation::{Accelerometer, AccelerometerSource};
+use crate::output::orientation::{Accelerometer, AccelerometerSource};
 use crate::output::Canvas;
 use crate::protocols::screencopy::frame::Screencopy;
 use crate::protocols::screencopy::{ScreencopyHandler, ScreencopyManagerState};
-use crate::udev::Udev;
-use crate::windows::Windows;
-use crate::windows::surface::Surface;
-use crate::{daemon, delegate_screencopy, ipc_server, trace_error};
+use crate::backend::udev::Udev;
+use crate::shell::windows::Windows;
+use crate::shell::windows::surface::Surface;
+use crate::backend::ipc as ipc_server;
+use crate::{daemon, delegate_screencopy, trace_error};
 
 /// Time before xdg_activation tokens are invalidated.
 const ACTIVATION_TIMEOUT: Duration = Duration::from_secs(10);
@@ -133,7 +134,7 @@ pub struct Catacomb {
     pub terminated: bool,
     pub backend: Udev,
     pub gilrs: Gilrs,
-    pub xwayland: Option<crate::xwayland::XWaylandExt>,
+    pub xwayland: Option<crate::shell::xwayland::XWaylandExt>,
 
     // Smithay state.
     pub idle_notifier_state: IdleNotifierState<Self>,
@@ -344,7 +345,7 @@ impl Catacomb {
             .insert_source(timer, Self::poll_gamepad)
             .expect("failed to schedule gamepad polling");
 
-        let xwayland_ext = crate::xwayland::setup(event_loop.clone(), &display_handle);
+        let xwayland_ext = crate::shell::xwayland::setup(event_loop.clone(), &display_handle);
 
         Self {
             gilrs,

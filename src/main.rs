@@ -12,21 +12,14 @@ use profiling::puffin;
 use puffin_http::Server;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
-mod catacomb;
+mod backend;
 mod config;
-mod drawing;
-mod geometry;
 mod input;
-mod ipc_server;
-mod layer;
-mod orientation;
 mod output;
-mod overview;
 mod protocols;
-mod socket;
-mod udev;
-mod windows;
-mod xwayland;
+mod shell;
+mod state;
+mod utils;
 
 /// Command line arguments.
 #[derive(Parser, Debug)]
@@ -66,7 +59,7 @@ pub fn main() {
             Ok(Some(IpcMessage::DpmsReply { state: CliToggle::Off })) => println!("off"),
             Ok(_) => (),
         },
-        None => udev::run(),
+        None => backend::udev::run(),
     }
 }
 

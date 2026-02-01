@@ -55,12 +55,12 @@ use smithay::wayland::dmabuf::{DmabufFeedback, DmabufFeedbackBuilder};
 use smithay::wayland::{dmabuf, shm};
 use tracing::{debug, error};
 
-use crate::catacomb::Catacomb;
-use crate::drawing::{CatacombElement, Graphics};
+use crate::state::Catacomb;
+use crate::output::drawing::{CatacombElement, Graphics};
 use crate::output::Output;
 use crate::protocols::screencopy::frame::Screencopy;
 use crate::trace_error;
-use crate::windows::Windows;
+use crate::shell::windows::Windows;
 
 /// Default background color.
 const CLEAR_COLOR: [f32; 4] = [0., 0., 0., 1.];

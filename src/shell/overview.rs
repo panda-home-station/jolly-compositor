@@ -8,13 +8,13 @@ use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::{LoopHandle, RegistrationToken};
 use smithay::utils::{Logical, Point, Rectangle, Size};
 
-use crate::catacomb::Catacomb;
-use crate::drawing::{CatacombElement, Graphics};
-use crate::geometry::Vector;
+use crate::state::Catacomb;
+use crate::output::drawing::{CatacombElement, Graphics};
+use crate::utils::geometry::Vector;
 use crate::input::HOLD_DURATION;
 use crate::output::{Canvas, Output};
-use crate::windows::layout::{LayoutPosition, Layouts};
-use crate::windows::window::Window;
+use crate::shell::windows::layout::{LayoutPosition, Layouts};
+use crate::shell::windows::window::Window;
 
 /// Percentage of output width reserved for the main window in the application
 /// overview at rest.

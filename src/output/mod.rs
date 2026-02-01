@@ -12,8 +12,11 @@ use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Physical, Rectangle, Size};
 use smithay::wayland::shell::wlr_layer::{Anchor, ExclusiveZone, Layer};
 
-use crate::catacomb::Catacomb;
-use crate::orientation::Orientation;
+use crate::state::Catacomb;
+use crate::output::orientation::Orientation;
+
+pub mod drawing;
+pub mod orientation;
 
 /// Height at bottom of the screen reserved for gestures at scale factor 1.
 pub const GESTURE_HANDLE_HEIGHT: i32 = 0;

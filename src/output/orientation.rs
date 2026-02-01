@@ -11,8 +11,8 @@ use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::{LoopHandle, RegistrationToken};
 use udev::{Device, Enumerator};
 
-use crate::catacomb::Catacomb;
-use crate::geometry::{Matrix3x3, Vector, Vector3D};
+use crate::state::Catacomb;
+use crate::utils::geometry::{Matrix3x3, Vector, Vector3D};
 
 /// Orientation change poll rate.
 const POLL_RATE: Duration = Duration::from_millis(500);

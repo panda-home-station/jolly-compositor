@@ -3,7 +3,7 @@ use smithay::reexports::wayland_server::DisplayHandle;
 use smithay::wayland::xwayland_shell::XWaylandShellState;
 use smithay::xwayland::{X11Wm, XWayland, XWaylandEvent};
 
-use crate::catacomb::Catacomb;
+use crate::state::Catacomb;
 use crate::daemon;
 use std::env;
 use std::collections::HashMap;
