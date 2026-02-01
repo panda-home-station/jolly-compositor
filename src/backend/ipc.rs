@@ -156,6 +156,9 @@ fn handle_message(buffer: &mut String, mut stream: UnixStream, catacomb: &mut Ca
             unsafe {
                 cmd.pre_exec(|| {
                     libc::setpgid(0, 0);
+                    // Clear ambient capabilities to prevent bwrap/pressure-vessel errors
+                    // PR_CAP_AMBIENT = 47, PR_CAP_AMBIENT_CLEAR_ALL = 4
+                    libc::prctl(47, 4, 0, 0, 0);
                     Ok(())
                 });
             }

@@ -1135,15 +1135,16 @@ impl Catacomb {
              }
          }
          if active_role.is_none() {
-             if let Some(m) = role_nav.as_ref() {
-                 if m.matches(Some(&app_id)) || m.matches(Some(&title)) {
-                     active_role = Some("nav");
-                 }
-             }
-         }
-         let allow_key_mapping = true;
- 
-         match event.event {
+            if let Some(m) = role_nav.as_ref() {
+                if m.matches(Some(&app_id)) || m.matches(Some(&title)) {
+                    active_role = Some("nav");
+                }
+            }
+        }
+        // Only allow key mapping for system roles (home, nav) to avoid double input in games
+        let allow_key_mapping = active_role.is_some();
+
+        match event.event {
              GilrsEventType::ButtonPressed(button, _) => {
                   match button {
                      Button::Mode => {
