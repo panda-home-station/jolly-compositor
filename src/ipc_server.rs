@@ -460,7 +460,7 @@ fn handle_message(buffer: &mut String, mut stream: UnixStream, catacomb: &mut Ca
             let canvas = catacomb.windows.canvas();
             let physical = canvas.physical_resolution();
             let (w, h) = (physical.w, physical.h);
-            let refresh = canvas.frame_interval();
+            let _refresh = canvas.frame_interval();
             // frame_interval is Duration; derive mHz from canvas.mode.refresh instead
             let mhz = catacomb.windows.output.smithay_output().current_mode().map(|m| m.refresh).unwrap_or(canvas.frame_interval().as_millis() as i32);
             let orientation = canvas.orientation();

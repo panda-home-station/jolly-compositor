@@ -61,9 +61,11 @@ static TRANSACTION_START: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone)]
 struct LaunchCtx {
+    #[allow(dead_code)]
     command: String,
     command_key: Option<String>,
     card_id: Option<String>,
+    #[allow(dead_code)]
     time: StdInstant,
     pid: Option<i32>,
     pgid: Option<i32>,
@@ -142,9 +144,7 @@ pub struct Windows {
     pending_suspend: Option<(i32, Instant)>,
     /// Role of the currently activated window (persisted even if window is destroyed).
     active_role: Option<String>,
-    /// Last focused App ID (used for audio corking).
-    last_focused_app_id: Option<String>,
-    /// Mapping from normalized command key to strict app_id.
+       /// Mapping from normalized command key to strict app_id.
     command_map: HashMap<String, String>,
     /// Mapping from card_id to strict app_id (reserved for future use).
     card_map: HashMap<String, String>,
@@ -203,7 +203,6 @@ impl Windows {
             pending_resume: None,
             pending_suspend: None,
             active_role: None,
-            last_focused_app_id: None,
             command_map: Default::default(),
             card_map: Default::default(),
             trace_scene_enabled: false,

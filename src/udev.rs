@@ -53,7 +53,7 @@ use smithay::reexports::wayland_server::protocol::wl_shm;
 use smithay::utils::{DevPath, DeviceFd, Logical, Physical, Point, Rectangle, Size, Transform};
 use smithay::wayland::dmabuf::{DmabufFeedback, DmabufFeedbackBuilder};
 use smithay::wayland::{dmabuf, shm};
-use tracing::{debug, error, info};
+use tracing::{debug, error};
 
 use crate::catacomb::Catacomb;
 use crate::drawing::{CatacombElement, Graphics};
@@ -663,8 +663,8 @@ impl Udev {
         
         let connector_handle = connector.handle();
         if let Ok(props) = drm.get_properties(connector_handle) {
-            let (handles, values) = props.as_props_and_values();
-            for (i, handle) in handles.iter().enumerate() {
+            let (handles, _values) = props.as_props_and_values();
+            for (_i, handle) in handles.iter().enumerate() {
                 if let Ok(info) = drm.get_property(*handle) {
                     let name = info.name().to_str().unwrap_or("unknown");
                     
@@ -720,7 +720,7 @@ impl Udev {
              }
         });
 
-        let best_existing_mode = preserved_mode
+        let _best_existing_mode = preserved_mode
             .or_else(|| {
                 // Find the preferred mode (usually native resolution)
                 let preferred = modes.iter().find(|mode| mode.mode_type().contains(ModeTypeFlags::PREFERRED));

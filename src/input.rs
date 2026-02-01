@@ -979,7 +979,7 @@ impl Catacomb {
         code: Keycode,
         state: KeyState,
     ) -> FilterResult<InputAction> {
-        let (title, app_id) = catacomb.active_window_info().unwrap_or_default();
+        let (_title, _app_id) = catacomb.active_window_info().unwrap_or_default();
         let allow_key_mapping = true;
 
         if allow_key_mapping {
