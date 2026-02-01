@@ -182,7 +182,12 @@ impl Catacomb {
             .expect("register unix signal source");
 
         // Create and register Wayland socket.
-        let socket_source = ListeningSocketSource::new_auto().expect("create Wayland socket");
+        let socket_source = if let Ok(env_socket) = env::var("WAYLAND_DISPLAY") {
+            ListeningSocketSource::with_name(&env_socket)
+        } else {
+            ListeningSocketSource::new_auto()
+        }
+        .expect("create Wayland socket");
         let socket_name = socket_source.socket_name().to_string_lossy().into_owned();
         event_loop
             .insert_source(socket_source, move |stream, _, catacomb| {
