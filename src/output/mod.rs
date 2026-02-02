@@ -22,7 +22,7 @@ pub mod orientation;
 pub const GESTURE_HANDLE_HEIGHT: i32 = 0;
 
 /// Use a fixed output scale.
-const SCALE: f64 = 2.;
+const SCALE: f64 = 1.;
 
 /// Wayland output, typically a screen.
 #[derive(Debug)]
