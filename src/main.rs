@@ -50,6 +50,18 @@ pub fn main() {
     );
     let env_filter = EnvFilter::builder().parse_lossy(directives);
     FmtSubscriber::builder().with_env_filter(env_filter).with_line_number(true).init();
+
+    // Add panic hook
+    std::panic::set_hook(Box::new(|info| {
+        let backtrace = std::backtrace::Backtrace::capture();
+        tracing::error!("Catacomb PANIC: {}\nBacktrace:\n{}", info, backtrace);
+        // Also write to a separate file just in case
+        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open("/home/jolly/phs/jollypad/catacomb_panic.log") {
+            use std::io::Write;
+            let _ = writeln!(file, "PANIC: {}\n{:?}", info, backtrace);
+        }
+    }));
+
     tracing::info!("🚀 Catacomb v1.0.6 starting...");
 
     match Options::parse().subcommands {

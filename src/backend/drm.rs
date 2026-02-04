@@ -623,7 +623,8 @@ impl OutputDevice {
 
                         if state == ConnectorState::Connected {
                             // Check if modes are plausible (e.g. not just 640x480 safe mode)
-                            if max_width >= 1920 {
+                            // If we find 1080p+, great. If not, after 5 seconds (10 attempts), accept anything usable.
+                            if max_width >= 1920 || (attempt > 10 && max_width >= 640) {
                                 Some(c)
                             } else {
                                 tracing::warn!("      ⚠️ Connector {:?} connected but max width {} < 1920. Waiting...", conn, max_width);

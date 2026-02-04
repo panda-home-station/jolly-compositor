@@ -124,7 +124,7 @@ pub struct Windows {
     pub window_scales: Vec<(AppIdMatcher, WindowScale)>,
 
     orphan_popups: Vec<Window<PopupSurface>>,
-    layouts: Layouts,
+    pub layouts: Layouts,
     layers: Layers,
     view: View,
 
@@ -577,7 +577,7 @@ impl Windows {
         for mut window in self.layouts.windows_mut() {
             if let ShellSurface::X11(s) = &window.surface {
                 if s.window_id() == window_id {
-                    window.kill();
+                    window.notify_destroyed();
                 }
             }
         }
@@ -606,6 +606,89 @@ impl Windows {
             } else {
                 self.layouts.set_active(&self.output, None, true);
             }
+        }
+    }
+
+    /// Handle X11 unmap (switch to workspace if fullscreen, but don't kill).
+    pub fn handle_unmap_x11(&mut self, window_id: u32) {
+        start_transaction();
+        let mut unmapped_fullscreen = false;
+        if let View::Fullscreen(window) = &self.view {
+            if let ShellSurface::X11(s) = &window.borrow().surface {
+                if s.window_id() == window_id {
+                    unmapped_fullscreen = true;
+                }
+            }
+        }
+
+        // Set visible = false for the unmapped window to prevent rendering artifacts/crashes
+        for layout in self.layouts.layouts() {
+            for window in layout.windows() {
+                let mut win = window.borrow_mut();
+                if let ShellSurface::X11(s) = &win.surface {
+                    if s.window_id() == window_id {
+                        win.set_visible(false);
+                    }
+                }
+            }
+        }
+
+        if unmapped_fullscreen {
+            // Do NOT switch view immediately.
+            // Switching to Workspace here causes a "Flash" (Resize) and potential race conditions
+            // if the window is being destroyed immediately after (ReparentWindow error).
+            // By staying in Fullscreen (with an invisible window), we effectively show a black screen,
+            // which is better for Splash -> Game transitions.
+            // If the window is truly destroyed, `mark_dead_x11` will eventually switch us to Workspace.
+            
+            // Still use transaction for layout changes (Home activation) to ensure internal state is ready
+            // if we do switch later.
+            let role_home = self.system_roles.get("home");
+            let desktop_index = self.layouts.layouts().iter().position(|l| {
+                if let Some(p) = l.primary() {
+                    let w = p.borrow();
+                    let t = w.title().unwrap_or_default();
+                    let xdg_id = w.xdg_app_id().unwrap_or_default();
+                    let app_id = w.app_id.clone().unwrap_or_default();
+                    if let Some(home_matcher) = role_home {
+                        home_matcher.matches(Some(&app_id)) || home_matcher.matches(Some(&t)) || home_matcher.matches(Some(&xdg_id))
+                    } else {
+                        t == "JollyPad-Desktop" || xdg_id == "jolly-home" || app_id == "jolly-home"
+                    }
+                } else {
+                    false
+                }
+            });
+            if let Some(index) = desktop_index {
+                self.layouts.set_active(&self.output, Some(LayoutPosition::new(index, false)), true);
+            } else if !self.layouts.is_empty() {
+                self.layouts.set_active(&self.output, Some(LayoutPosition::new(0, false)), true);
+            } else {
+                self.layouts.set_active(&self.output, None, true);
+            }
+        }
+    }
+
+    /// Handle X11 map request (restore fullscreen if it was the active window).
+    pub fn handle_map_x11(&mut self, window_id: u32) {
+        let mut found_window = None;
+        for layout in self.layouts.layouts() {
+            for window in layout.windows() {
+                if let ShellSurface::X11(s) = &window.borrow().surface {
+                     if s.window_id() == window_id {
+                        found_window = Some(window.clone());
+                        break;
+                    }
+                }
+            }
+            if found_window.is_some() {
+                break;
+            }
+        }
+        
+        if let Some(window) = found_window {
+             window.borrow_mut().set_visible(true);
+             self.view = View::Fullscreen(window);
         }
     }
 
@@ -745,6 +828,14 @@ impl Windows {
 
     /// Add a new X11 window.
     pub fn add_x11(&mut self, surface: X11Surface) {
+        let title = surface.title();
+        let class = surface.class();
+        info!("add_x11: New X11 window detected. Title='{}' Class='{}' OverrideRedirect={}", title, class, surface.is_override_redirect());
+
+        if surface.is_override_redirect() {
+            return;
+        }
+
         let surface = ShellSurface::X11(surface);
 
         let transform = self.output.orientation().surface_transform();
@@ -757,7 +848,13 @@ impl Windows {
         // Auto-focus the new window
         self.layouts.focus = Some(Rc::downgrade(&window));
 
+        window.borrow_mut().set_visible(true);
+
         // Switch view to Fullscreen immediately
+        // Ensure we clear any pending view transaction that might revert to Workspace
+        if let Some(t) = self.transaction.as_mut() {
+            t.view = None;
+        }
         self.view = View::Fullscreen(window.clone());
 
         if let Some((cmd, t)) = self.last_launch.take() {

@@ -675,14 +675,18 @@ impl Layout {
         let secondary = self.secondary.as_deref().map(RefCell::borrow_mut);
 
         if let Some(mut primary) = primary {
-            let secondary_alive = secondary.as_ref().is_some_and(|window| window.alive());
-            let rectangle = output.primary_rectangle(secondary_alive);
-            primary.set_dimensions(output.scale(), rectangle);
+            if primary.alive() {
+                let secondary_alive = secondary.as_ref().is_some_and(|window| window.alive());
+                let rectangle = output.primary_rectangle(secondary_alive);
+                primary.set_dimensions(output.scale(), rectangle);
+            }
         }
 
         if let Some(mut secondary) = secondary {
-            let rectangle = output.secondary_rectangle();
-            secondary.set_dimensions(output.scale(), rectangle);
+            if secondary.alive() {
+                let rectangle = output.secondary_rectangle();
+                secondary.set_dimensions(output.scale(), rectangle);
+            }
         }
     }
 }

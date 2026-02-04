@@ -18,6 +18,7 @@ use libc;
 use crate::state::Catacomb;
 use crate::config::{GestureBinding, GestureBindingAction, KeyBinding};
 use crate::backend::socket::SocketSource;
+use crate::shell::windows::surface::Surface;
 
 /// Create an IPC socket.
 pub fn spawn_ipc_socket(
@@ -235,6 +236,39 @@ fn handle_message(buffer: &mut String, mut stream: UnixStream, catacomb: &mut Ca
         },
         IpcMessage::DumpFocusGraph => {
             catacomb.windows.log_focus_graph();
+        },
+        IpcMessage::DebugTree => {
+            let mut tree = String::new();
+            let active_id = catacomb.windows.layouts.active().id;
+            for (i, layout) in catacomb.windows.layouts.layouts().iter().enumerate() {
+                 let marker = if layout.id == active_id { "*" } else { " " };
+                 tree.push_str(&format!("Layout [{}] {}:\n", i, marker));
+
+                 if let Some(primary) = layout.primary() {
+                     let win = std::cell::RefCell::borrow(primary);
+                     let app_id = win.app_id.as_deref().unwrap_or("?");
+                     let title = win.surface.title().unwrap_or_default();
+                     tree.push_str(&format!("  [Primary] AppID: {}, Title: {}\n", app_id, title));
+                 } else {
+                      tree.push_str("  [Primary] <empty>\n");
+                 }
+
+                 if let Some(secondary) = layout.secondary() {
+                     let win = std::cell::RefCell::borrow(secondary);
+                     let app_id = win.app_id.as_deref().unwrap_or("?");
+                     let title = win.surface.title().unwrap_or_default();
+                     tree.push_str(&format!("  [Secondary] AppID: {}, Title: {}\n", app_id, title));
+                 } else {
+                      tree.push_str("  [Secondary] <empty>\n");
+                 }
+            }
+            send_reply(&mut stream, &IpcMessage::DebugTreeReply { tree });
+        },
+        IpcMessage::DebugFocus { index, secondary } => {
+            use crate::shell::windows::layout::LayoutPosition;
+            let pos = LayoutPosition::new(index, secondary);
+            catacomb.windows.layouts.set_active(&catacomb.windows.output, Some(pos), true);
+            catacomb.unstall();
         },
         IpcMessage::TraceScene { state } => {
             let enabled = matches!(state, CliToggle::On);
@@ -514,7 +548,7 @@ fn handle_message(buffer: &mut String, mut stream: UnixStream, catacomb: &mut Ca
             }
         },
         // Ignore IPC replies.
-        IpcMessage::DpmsReply { .. } | IpcMessage::ActiveWindow { .. } | IpcMessage::Clients { .. } | IpcMessage::OutputInfo { .. } | IpcMessage::OutputModes { .. } => (),
+        IpcMessage::DpmsReply { .. } | IpcMessage::ActiveWindow { .. } | IpcMessage::Clients { .. } | IpcMessage::OutputInfo { .. } | IpcMessage::OutputModes { .. } | IpcMessage::DebugTreeReply { .. } => (),
     }
 }
 

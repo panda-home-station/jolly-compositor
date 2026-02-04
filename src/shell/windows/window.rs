@@ -131,6 +131,11 @@ impl<S: Surface + 'static> Window<S> {
         !self.dead && self.surface.alive()
     }
 
+    /// Set window visibility.
+    pub fn set_visible(&mut self, visible: bool) {
+        self.visible = visible;
+    }
+
     /// Add this window's textures to the supplied buffer.
     pub fn textures(
         &self,
@@ -139,6 +144,9 @@ impl<S: Surface + 'static> Window<S> {
         window_scale: impl Into<Option<f64>>,
         location: impl Into<Option<Point<i32, Logical>>>,
     ) {
+        if !self.alive() || !self.visible {
+            return;
+        }
         self.textures_with_bounds(textures, output_scale, window_scale, location, None);
     }
 
@@ -154,6 +162,9 @@ impl<S: Surface + 'static> Window<S> {
         location: impl Into<Option<Point<i32, Logical>>>,
         bounds: impl Into<Option<Rectangle<i32, Physical>>>,
     ) {
+        if !self.alive() {
+            return;
+        }
         let location = location.into().unwrap_or_else(|| self.bounds(output_scale).loc);
         let window_scale = window_scale.into().unwrap_or(1.);
 
@@ -214,6 +225,10 @@ impl<S: Surface + 'static> Window<S> {
 
     /// Import the buffers of all surfaces into the renderer.
     pub fn import_buffers(&mut self, renderer: &mut GlesRenderer) {
+        if !self.alive() || !self.visible {
+            return;
+        }
+
         // Do not import buffers during a transaction.
         if self.transaction.is_some() {
             return;
@@ -380,6 +395,10 @@ impl<S: Surface + 'static> Window<S> {
 
     /// Change the window dimensions.
     pub fn set_dimensions(&mut self, output_scale: f64, rectangle: Rectangle<i32, Logical>) {
+        if !self.alive() || !self.visible {
+            return;
+        }
+
         // Scale size from output logical to window logical coordinates.
         let mut size = rectangle.size;
         if let Some(window_scale) = &self.scale {
@@ -861,6 +880,12 @@ impl Window {
     /// Close the application.
     pub fn kill(&mut self) {
         self.surface.send_close();
+        self.dead = true;
+    }
+
+    /// Mark the window as destroyed without sending a close event.
+    /// This should be used when the window is already destroyed by the client (e.g. X11 destroyed_window).
+    pub fn notify_destroyed(&mut self) {
         self.dead = true;
     }
 }

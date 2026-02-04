@@ -38,6 +38,7 @@ impl XwmHandler for Catacomb {
 
     fn map_window_request(&mut self, _xwm: XwmId, window: X11Surface) {
         let _ = window.set_mapped(true);
+        self.windows.handle_map_x11(window.window_id());
     }
 
     fn mapped_override_redirect_window(&mut self, _xwm: XwmId, _window: X11Surface) {}
@@ -46,7 +47,7 @@ impl XwmHandler for Catacomb {
             ext.pending_configs.remove(&window.window_id());
         }
         info!("x11 unmapped window id={}", window.window_id());
-        self.windows.mark_dead_x11(window.window_id());
+        self.windows.handle_unmap_x11(window.window_id());
         self.unstall();
     }
     fn destroyed_window(&mut self, _xwm: XwmId, window: X11Surface) {
