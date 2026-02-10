@@ -313,27 +313,29 @@ fn handle_message(buffer: &mut String, mut stream: UnixStream, catacomb: &mut Ca
                 return;
             }
             if role == "home" && act == "select" {
-                catacomb.simulate_key(keysyms::KEY_Return, KeyState::Pressed);
-                catacomb.simulate_key(keysyms::KEY_Return, KeyState::Released);
+                let time = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or(std::time::Duration::ZERO).as_millis() as u32;
+                catacomb.simulate_key(keysyms::KEY_Return, KeyState::Pressed, time);
+                catacomb.simulate_key(keysyms::KEY_Return, KeyState::Released, time);
                 return;
             }
             if role == "home" && act == "navigate" {
+                let time = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or(std::time::Duration::ZERO).as_millis() as u32;
                 match payload.as_deref() {
                     Some("up") => {
-                        catacomb.simulate_key(keysyms::KEY_Up, KeyState::Pressed);
-                        catacomb.simulate_key(keysyms::KEY_Up, KeyState::Released);
+                        catacomb.simulate_key(keysyms::KEY_Up, KeyState::Pressed, time);
+                        catacomb.simulate_key(keysyms::KEY_Up, KeyState::Released, time);
                     }
                     Some("down") => {
-                        catacomb.simulate_key(keysyms::KEY_Down, KeyState::Pressed);
-                        catacomb.simulate_key(keysyms::KEY_Down, KeyState::Released);
+                        catacomb.simulate_key(keysyms::KEY_Down, KeyState::Pressed, time);
+                        catacomb.simulate_key(keysyms::KEY_Down, KeyState::Released, time);
                     }
                     Some("left") => {
-                        catacomb.simulate_key(keysyms::KEY_Left, KeyState::Pressed);
-                        catacomb.simulate_key(keysyms::KEY_Left, KeyState::Released);
+                        catacomb.simulate_key(keysyms::KEY_Left, KeyState::Pressed, time);
+                        catacomb.simulate_key(keysyms::KEY_Left, KeyState::Released, time);
                     }
                     Some("right") => {
-                        catacomb.simulate_key(keysyms::KEY_Right, KeyState::Pressed);
-                        catacomb.simulate_key(keysyms::KEY_Right, KeyState::Released);
+                        catacomb.simulate_key(keysyms::KEY_Right, KeyState::Pressed, time);
+                        catacomb.simulate_key(keysyms::KEY_Right, KeyState::Released, time);
                     }
                     _ => {}
                 }

@@ -1,6 +1,6 @@
 //! Input event handling.
 
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use gilrs::{Axis, Button, Event as GilrsEvent, EventType as GilrsEventType};
 use catacomb_ipc::{AppIdMatcher, GestureSector, KeyTrigger, Keysym, Modifiers};
@@ -985,11 +985,11 @@ impl Catacomb {
         if allow_key_mapping {
             match code.raw() {
                 312 => {
-                    catacomb.simulate_key(keysyms::KEY_Return, state);
+                    catacomb.simulate_key(keysyms::KEY_Return, state, 0);
                     return InputAction::None.into();
                 },
                 313 => {
-                    catacomb.simulate_key(keysyms::KEY_Escape, state);
+                    catacomb.simulate_key(keysyms::KEY_Escape, state, 0);
                     return InputAction::None.into();
                 },
                 _ => {},
@@ -1125,7 +1125,8 @@ impl Catacomb {
 
     /// Handle a gamepad event.
      fn handle_gamepad_event(&mut self, event: GilrsEvent) {
-         let (title, app_id) = self.active_window_info().unwrap_or_default();
+        let time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or(Duration::ZERO).as_millis() as u32;
+        let (title, app_id) = self.active_window_info().unwrap_or_default();
          let role_home = self.windows.system_role("home");
          let role_nav = self.windows.system_role("nav");
          let mut active_role: Option<&'static str> = None;
@@ -1163,28 +1164,28 @@ impl Catacomb {
                             if value < -deadzone {
                                 // Left Pressed
                                 if self.mapped_stick_keys.insert(keysyms::KEY_Left) {
-                                    self.simulate_key(keysyms::KEY_Left, KeyState::Pressed);
+                                    self.simulate_key(keysyms::KEY_Left, KeyState::Pressed, time);
                                 }
                                 // Release Right if held
                                 if self.mapped_stick_keys.remove(&keysyms::KEY_Right) {
-                                    self.simulate_key(keysyms::KEY_Right, KeyState::Released);
+                                    self.simulate_key(keysyms::KEY_Right, KeyState::Released, time);
                                 }
                             } else if value > deadzone {
                                 // Right Pressed
                                 if self.mapped_stick_keys.insert(keysyms::KEY_Right) {
-                                    self.simulate_key(keysyms::KEY_Right, KeyState::Pressed);
+                                    self.simulate_key(keysyms::KEY_Right, KeyState::Pressed, time);
                                 }
                                 // Release Left if held
                                 if self.mapped_stick_keys.remove(&keysyms::KEY_Left) {
-                                    self.simulate_key(keysyms::KEY_Left, KeyState::Released);
+                                    self.simulate_key(keysyms::KEY_Left, KeyState::Released, time);
                                 }
                             } else {
                                 // Center - Release both
                                 if self.mapped_stick_keys.remove(&keysyms::KEY_Left) {
-                                    self.simulate_key(keysyms::KEY_Left, KeyState::Released);
+                                    self.simulate_key(keysyms::KEY_Left, KeyState::Released, time);
                                 }
                                 if self.mapped_stick_keys.remove(&keysyms::KEY_Right) {
-                                    self.simulate_key(keysyms::KEY_Right, KeyState::Released);
+                                    self.simulate_key(keysyms::KEY_Right, KeyState::Released, time);
                                 }
                             }
                         },
@@ -1194,26 +1195,26 @@ impl Catacomb {
                             if value < -deadzone {
                                 // Up Pressed
                                 if self.mapped_stick_keys.insert(keysyms::KEY_Up) {
-                                    self.simulate_key(keysyms::KEY_Up, KeyState::Pressed);
+                                    self.simulate_key(keysyms::KEY_Up, KeyState::Pressed, time);
                                 }
                                 if self.mapped_stick_keys.remove(&keysyms::KEY_Down) {
-                                    self.simulate_key(keysyms::KEY_Down, KeyState::Released);
+                                    self.simulate_key(keysyms::KEY_Down, KeyState::Released, time);
                                 }
                             } else if value > deadzone {
                                 // Down Pressed
                                 if self.mapped_stick_keys.insert(keysyms::KEY_Down) {
-                                    self.simulate_key(keysyms::KEY_Down, KeyState::Pressed);
+                                    self.simulate_key(keysyms::KEY_Down, KeyState::Pressed, time);
                                 }
                                 if self.mapped_stick_keys.remove(&keysyms::KEY_Up) {
-                                    self.simulate_key(keysyms::KEY_Up, KeyState::Released);
+                                    self.simulate_key(keysyms::KEY_Up, KeyState::Released, time);
                                 }
                             } else {
                                 // Center
                                 if self.mapped_stick_keys.remove(&keysyms::KEY_Up) {
-                                    self.simulate_key(keysyms::KEY_Up, KeyState::Released);
+                                    self.simulate_key(keysyms::KEY_Up, KeyState::Released, time);
                                 }
                                 if self.mapped_stick_keys.remove(&keysyms::KEY_Down) {
-                                    self.simulate_key(keysyms::KEY_Down, KeyState::Released);
+                                    self.simulate_key(keysyms::KEY_Down, KeyState::Released, time);
                                 }
                             }
                         },
@@ -1244,7 +1245,7 @@ impl Catacomb {
                             }
                         }
                         self.note_input_event("navigate:up");
-                        self.simulate_key(keysyms::KEY_Up, KeyState::Pressed);
+                        self.simulate_key(keysyms::KEY_Up, KeyState::Pressed, time);
                         self.mapped_buttons.insert(Button::DPadUp);
                     },
                     Button::DPadDown if allow_key_mapping => {
@@ -1254,7 +1255,7 @@ impl Catacomb {
                             }
                         }
                         self.note_input_event("navigate:down");
-                        self.simulate_key(keysyms::KEY_Down, KeyState::Pressed);
+                        self.simulate_key(keysyms::KEY_Down, KeyState::Pressed, time);
                         self.mapped_buttons.insert(Button::DPadDown);
                     },
                     Button::DPadLeft if allow_key_mapping => {
@@ -1264,7 +1265,7 @@ impl Catacomb {
                             }
                         }
                         self.note_input_event("navigate:left");
-                        self.simulate_key(keysyms::KEY_Left, KeyState::Pressed);
+                        self.simulate_key(keysyms::KEY_Left, KeyState::Pressed, time);
                         self.mapped_buttons.insert(Button::DPadLeft);
                     },
                     Button::DPadRight if allow_key_mapping => {
@@ -1274,7 +1275,7 @@ impl Catacomb {
                             }
                         }
                         self.note_input_event("navigate:right");
-                        self.simulate_key(keysyms::KEY_Right, KeyState::Pressed);
+                        self.simulate_key(keysyms::KEY_Right, KeyState::Pressed, time);
                         self.mapped_buttons.insert(Button::DPadRight);
                     },
                     Button::South if allow_key_mapping => {
@@ -1284,7 +1285,7 @@ impl Catacomb {
                             }
                         }
                         self.note_input_event("select");
-                        self.simulate_key(keysyms::KEY_Return, KeyState::Pressed);
+                        self.simulate_key(keysyms::KEY_Return, KeyState::Pressed, time);
                         self.mapped_buttons.insert(Button::South);
                     },
                     Button::East if allow_key_mapping => {
@@ -1294,7 +1295,7 @@ impl Catacomb {
                             }
                         }
                         self.note_input_event("back");
-                        self.simulate_key(keysyms::KEY_Escape, KeyState::Pressed);
+                        self.simulate_key(keysyms::KEY_Escape, KeyState::Pressed, time);
                         self.mapped_buttons.insert(Button::East);
                     },
                     Button::LeftTrigger | Button::LeftTrigger2 if allow_key_mapping => {
@@ -1303,8 +1304,9 @@ impl Catacomb {
                                 tracing::info!("pad: role={} action=tab_prev app_id='{}' title='{}'", r, app_id, title);
                             }
                         }
+                        println!("DEBUG: LB Pressed (button={:?}). Simulating PageUp Press", button);
                         self.note_input_event("tab:prev");
-                        self.simulate_key(keysyms::KEY_Page_Up, KeyState::Pressed);
+                        self.simulate_key(keysyms::KEY_Page_Up, KeyState::Pressed, time);
                         self.mapped_buttons.insert(button);
                     },
                     Button::RightTrigger | Button::RightTrigger2 if allow_key_mapping => {
@@ -1313,8 +1315,9 @@ impl Catacomb {
                                 tracing::info!("pad: role={} action=tab_next app_id='{}' title='{}'", r, app_id, title);
                             }
                         }
+                        println!("DEBUG: RB Pressed (button={:?}). Simulating PageDown Press", button);
                         self.note_input_event("tab:next");
-                        self.simulate_key(keysyms::KEY_Page_Down, KeyState::Pressed);
+                        self.simulate_key(keysyms::KEY_Page_Down, KeyState::Pressed, time);
                         self.mapped_buttons.insert(button);
                     },
                      _ => {}
@@ -1330,34 +1333,48 @@ impl Catacomb {
                              let _ = Self::handle_user_binding(self, &mods, key, state);
                          }
                     },
+                     Button::LeftTrigger | Button::LeftTrigger2 => {
+                         let removed = self.mapped_buttons.remove(&button);
+                         println!("DEBUG: LB Released (button={:?}, removed={}). Simulating PageUp Release", button, removed);
+                         if removed {
+                             self.simulate_key(keysyms::KEY_Page_Up, KeyState::Released, time);
+                         }
+                     },
+                     Button::RightTrigger | Button::RightTrigger2 => {
+                         let removed = self.mapped_buttons.remove(&button);
+                         println!("DEBUG: RB Released (button={:?}, removed={}). Simulating PageDown Release", button, removed);
+                         if removed {
+                             self.simulate_key(keysyms::KEY_Page_Down, KeyState::Released, time);
+                         }
+                     },
                      Button::DPadUp => {
                          if self.mapped_buttons.remove(&Button::DPadUp) {
-                             self.simulate_key(keysyms::KEY_Up, KeyState::Released);
+                             self.simulate_key(keysyms::KEY_Up, KeyState::Released, time);
                          }
                      },
                      Button::DPadDown => {
                          if self.mapped_buttons.remove(&Button::DPadDown) {
-                             self.simulate_key(keysyms::KEY_Down, KeyState::Released);
+                             self.simulate_key(keysyms::KEY_Down, KeyState::Released, time);
                          }
                      },
                      Button::DPadLeft => {
                          if self.mapped_buttons.remove(&Button::DPadLeft) {
-                             self.simulate_key(keysyms::KEY_Left, KeyState::Released);
+                             self.simulate_key(keysyms::KEY_Left, KeyState::Released, time);
                          }
                      },
                      Button::DPadRight => {
                          if self.mapped_buttons.remove(&Button::DPadRight) {
-                             self.simulate_key(keysyms::KEY_Right, KeyState::Released);
+                             self.simulate_key(keysyms::KEY_Right, KeyState::Released, time);
                          }
                      },
                      Button::South => {
                          if self.mapped_buttons.remove(&Button::South) {
-                             self.simulate_key(keysyms::KEY_Return, KeyState::Released);
+                             self.simulate_key(keysyms::KEY_Return, KeyState::Released, time);
                          }
                      },
                      Button::East => {
                          if self.mapped_buttons.remove(&Button::East) {
-                             self.simulate_key(keysyms::KEY_Escape, KeyState::Released);
+                             self.simulate_key(keysyms::KEY_Escape, KeyState::Released, time);
                          }
                      },
                      _ => {}
@@ -1368,10 +1385,10 @@ impl Catacomb {
      }
 
     /// Simulate a key press/release.
-    pub fn simulate_key(&mut self, keysym: u32, state: KeyState) {
+    pub fn simulate_key(&mut self, keysym: u32, state: KeyState, time: u32) {
         let keycodes = self.keysym_to_keycode(keysym);
         if let Some(keycode) = keycodes.first() {
-             self.on_keyboard_input(*keycode, state, 0);
+             self.on_keyboard_input(*keycode, state, time);
         }
     }
 
