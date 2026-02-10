@@ -11,7 +11,6 @@ use profiling::puffin::GlobalProfiler;
 use smithay::backend::drm::DrmDeviceFd;
 use smithay::backend::libinput::{LibinputInputBackend, LibinputSessionInterface};
 use smithay::backend::renderer::gles::GlesRenderer;
-use smithay::backend::renderer::Renderer;
 use smithay::backend::session::libseat::LibSeatSession;
 use smithay::backend::session::{AsErrno, Event as SessionEvent, Session};
 use smithay::backend::udev::{UdevBackend, UdevEvent};
@@ -21,7 +20,6 @@ use smithay::reexports::calloop::{
 };
 use smithay::reexports::input::Libinput;
 use smithay::reexports::rustix::fs::OFlags;
-use smithay::reexports::wayland_protocols::wp::linux_dmabuf as _linux_dmabuf;
 use smithay::reexports::wayland_server::DisplayHandle;
 use smithay::utils::{DevPath, DeviceFd, Logical, Point};
 use smithay::wayland::dmabuf::DmabufFeedback;

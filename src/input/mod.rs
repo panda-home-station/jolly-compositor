@@ -2,7 +2,7 @@
 
 use std::time::{Duration, Instant};
 
-use gilrs::{Button, Event as GilrsEvent, EventType as GilrsEventType};
+use gilrs::{Axis, Button, Event as GilrsEvent, EventType as GilrsEventType};
 use catacomb_ipc::{AppIdMatcher, GestureSector, KeyTrigger, Keysym, Modifiers};
 use smithay::backend::input::{
     AbsolutePositionEvent, ButtonState, Event, InputBackend, InputEvent, KeyState,
@@ -1141,11 +1141,87 @@ impl Catacomb {
                 }
             }
         }
-        // Only allow key mapping for system roles (home, nav) to avoid double input in games
+        
+        let role_settings = self.windows.system_role("settings");
+        if active_role.is_none() {
+            if let Some(m) = role_settings.as_ref() {
+                if m.matches(Some(&app_id)) || m.matches(Some(&title)) {
+                    active_role = Some("settings");
+                }
+            }
+        }
+
+        // Only allow key mapping for system roles (home, nav, settings) to avoid double input in games
         let allow_key_mapping = active_role.is_some();
 
         match event.event {
-             GilrsEventType::ButtonPressed(button, _) => {
+             GilrsEventType::AxisChanged(axis, value, _) => {
+                if allow_key_mapping {
+                    let deadzone = 0.5;
+                    match axis {
+                        Axis::LeftStickX => {
+                            if value < -deadzone {
+                                // Left Pressed
+                                if self.mapped_stick_keys.insert(keysyms::KEY_Left) {
+                                    self.simulate_key(keysyms::KEY_Left, KeyState::Pressed);
+                                }
+                                // Release Right if held
+                                if self.mapped_stick_keys.remove(&keysyms::KEY_Right) {
+                                    self.simulate_key(keysyms::KEY_Right, KeyState::Released);
+                                }
+                            } else if value > deadzone {
+                                // Right Pressed
+                                if self.mapped_stick_keys.insert(keysyms::KEY_Right) {
+                                    self.simulate_key(keysyms::KEY_Right, KeyState::Pressed);
+                                }
+                                // Release Left if held
+                                if self.mapped_stick_keys.remove(&keysyms::KEY_Left) {
+                                    self.simulate_key(keysyms::KEY_Left, KeyState::Released);
+                                }
+                            } else {
+                                // Center - Release both
+                                if self.mapped_stick_keys.remove(&keysyms::KEY_Left) {
+                                    self.simulate_key(keysyms::KEY_Left, KeyState::Released);
+                                }
+                                if self.mapped_stick_keys.remove(&keysyms::KEY_Right) {
+                                    self.simulate_key(keysyms::KEY_Right, KeyState::Released);
+                                }
+                            }
+                        },
+                        Axis::LeftStickY => {
+                            // Up/Down is usually Y axis. Positive is often Down?
+                            // Let's assume Standard Gamepad: Up is -1.0, Down is 1.0.
+                            if value < -deadzone {
+                                // Up Pressed
+                                if self.mapped_stick_keys.insert(keysyms::KEY_Up) {
+                                    self.simulate_key(keysyms::KEY_Up, KeyState::Pressed);
+                                }
+                                if self.mapped_stick_keys.remove(&keysyms::KEY_Down) {
+                                    self.simulate_key(keysyms::KEY_Down, KeyState::Released);
+                                }
+                            } else if value > deadzone {
+                                // Down Pressed
+                                if self.mapped_stick_keys.insert(keysyms::KEY_Down) {
+                                    self.simulate_key(keysyms::KEY_Down, KeyState::Pressed);
+                                }
+                                if self.mapped_stick_keys.remove(&keysyms::KEY_Up) {
+                                    self.simulate_key(keysyms::KEY_Up, KeyState::Released);
+                                }
+                            } else {
+                                // Center
+                                if self.mapped_stick_keys.remove(&keysyms::KEY_Up) {
+                                    self.simulate_key(keysyms::KEY_Up, KeyState::Released);
+                                }
+                                if self.mapped_stick_keys.remove(&keysyms::KEY_Down) {
+                                    self.simulate_key(keysyms::KEY_Down, KeyState::Released);
+                                }
+                            }
+                        },
+                        _ => {}
+                    }
+                }
+            },
+            GilrsEventType::ButtonPressed(button, _) => {
                   match button {
                      Button::Mode => {
                           if let Ok(app) = AppIdMatcher::try_from("JollyPad-Overlay".to_string()) {
@@ -1220,6 +1296,26 @@ impl Catacomb {
                         self.note_input_event("back");
                         self.simulate_key(keysyms::KEY_Escape, KeyState::Pressed);
                         self.mapped_buttons.insert(Button::East);
+                    },
+                    Button::LeftTrigger | Button::LeftTrigger2 if allow_key_mapping => {
+                         if self.input_log_enabled {
+                            if let Some(r) = active_role {
+                                tracing::info!("pad: role={} action=tab_prev app_id='{}' title='{}'", r, app_id, title);
+                            }
+                        }
+                        self.note_input_event("tab:prev");
+                        self.simulate_key(keysyms::KEY_Page_Up, KeyState::Pressed);
+                        self.mapped_buttons.insert(button);
+                    },
+                    Button::RightTrigger | Button::RightTrigger2 if allow_key_mapping => {
+                         if self.input_log_enabled {
+                            if let Some(r) = active_role {
+                                tracing::info!("pad: role={} action=tab_next app_id='{}' title='{}'", r, app_id, title);
+                            }
+                        }
+                        self.note_input_event("tab:next");
+                        self.simulate_key(keysyms::KEY_Page_Down, KeyState::Pressed);
+                        self.mapped_buttons.insert(button);
                     },
                      _ => {}
                  }
