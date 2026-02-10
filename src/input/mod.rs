@@ -30,10 +30,10 @@ use crate::shell::windows::surface::{InputSurface, InputSurfaceKind};
 pub const HOLD_DURATION: Duration = Duration::from_secs(1);
 
 /// Time before key repeat starts.
-pub const REPEAT_DELAY: Duration = Duration::from_millis(200);
+pub const REPEAT_DELAY: Duration = Duration::from_millis(500);
 
 /// Key repeat interval after the first repetition.
-pub const REPEAT_RATE: Duration = Duration::from_millis(25);
+pub const REPEAT_RATE: Duration = Duration::from_millis(100);
 
 /// Maximum time between taps to be considered a double-tap.
 const MAX_DOUBLE_TAP_DURATION: Duration = Duration::from_millis(300);
@@ -1304,10 +1304,10 @@ impl Catacomb {
                                 tracing::info!("pad: role={} action=tab_prev app_id='{}' title='{}'", r, app_id, title);
                             }
                         }
-                        println!("DEBUG: LB Pressed (button={:?}). Simulating PageUp Press", button);
+                        println!("DEBUG: LB Pressed (button={:?}). Simulating PageUp Click", button);
                         self.note_input_event("tab:prev");
                         self.simulate_key(keysyms::KEY_Page_Up, KeyState::Pressed, time);
-                        self.mapped_buttons.insert(button);
+                        self.simulate_key(keysyms::KEY_Page_Up, KeyState::Released, time);
                     },
                     Button::RightTrigger | Button::RightTrigger2 if allow_key_mapping => {
                          if self.input_log_enabled {
@@ -1315,10 +1315,10 @@ impl Catacomb {
                                 tracing::info!("pad: role={} action=tab_next app_id='{}' title='{}'", r, app_id, title);
                             }
                         }
-                        println!("DEBUG: RB Pressed (button={:?}). Simulating PageDown Press", button);
+                        println!("DEBUG: RB Pressed (button={:?}). Simulating PageDown Click", button);
                         self.note_input_event("tab:next");
                         self.simulate_key(keysyms::KEY_Page_Down, KeyState::Pressed, time);
-                        self.mapped_buttons.insert(button);
+                        self.simulate_key(keysyms::KEY_Page_Down, KeyState::Released, time);
                     },
                      _ => {}
                  }
