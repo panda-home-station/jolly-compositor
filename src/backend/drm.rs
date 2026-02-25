@@ -190,7 +190,7 @@ impl OutputDevice {
             })
             .copied();
 
-        let mut drm_mode = if let Some(m) = found_mode {
+        let drm_mode = if let Some(m) = found_mode {
             m
         } else {
              return Err("Mode not found".into());
@@ -665,12 +665,12 @@ impl OutputDevice {
             Ok(c) => {
                 c
             },
-            Err(e) => {
+            Err(_e) => {
                 connector // Fallback to old info
             }
         };
 
-        let mut modes = connector.modes().to_vec();
+        let modes = connector.modes().to_vec();
         
         // Try to preserve existing mode if the output matches.
         let output_name = format!("{:?}", connector.interface());
