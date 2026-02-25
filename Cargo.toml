@@ -8,8 +8,6 @@ rust-version = "1.85.0"
 license = "GPL-3.0"
 edition = "2024"
 
-
-
 [features]
 default = []
 profiling = ["dep:profiling", "dep:puffin_http"]
@@ -48,3 +46,6 @@ tracing = "0.1.37"
 tracing-subscriber = { version = "0.3.17", features = ["env-filter"] }
 udev = "0.9.1"
 gilrs = "0.11.0"
+
+[lints.rust]
+warnings = "deny"
