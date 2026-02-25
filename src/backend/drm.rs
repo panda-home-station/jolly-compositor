@@ -196,24 +196,7 @@ impl OutputDevice {
              return Err("Mode not found".into());
         };
 
-        // HACK: Inject YCbCr420_ONLY flag (0x8000) for 4K modes
-        // This is required because some HDMI 2.0 sinks only support 4K@60Hz in YCbCr 4:2:0,
-        // but the kernel/driver might not set this flag automatically or correctly.
-        let (w, h) = drm_mode.size();
-        if (w == 3840 && h == 2160) || (w == 4096 && h == 2160) {
-             const DRM_MODE_FLAG_YCBCR420_ONLY: u32 = 0x8000;
-             unsafe {
-                  let ptr = &mut drm_mode as *mut _ as *mut u8;
-                  // Offset 28 is flags in drm_mode_modeinfo struct (u32)
-                  let flags_ptr = ptr.add(28) as *mut u32;
-                  let current_flags = *flags_ptr;
-                  
-                  if (current_flags & DRM_MODE_FLAG_YCBCR420_ONLY) == 0 {
-                      *flags_ptr = current_flags | DRM_MODE_FLAG_YCBCR420_ONLY;
-                      tracing::info!("🔧 set_mode: Forced YCbCr420_ONLY (0x8000) for 4K mode. Old flags: 0x{:x}, New flags: 0x{:x}", current_flags, *flags_ptr);
-                  }
-             }
-        }
+        let (_w, _h) = drm_mode.size();
 
         tracing::info!("Using DRM mode: {:?}", drm_mode);
         self.drm_compositor.surface().use_mode(drm_mode)?;
@@ -523,34 +506,11 @@ impl OutputDevice {
                 return None;
             }
         };
-
-        // FILTER: Force Linear modifier only to avoid AFBC issues causing Invalid Argument errors
-        // Convert to Vec to allow filtering and passing to DrmCompositor
-        let mut formats: Vec<_> = formats_group.into_iter().collect();
-        
-        let linear_formats: Vec<_> = formats.iter().cloned().filter(|f| {
-            let mod_val = u64::from(f.modifier);
-            // 0 = Linear
-            // 72057594037927935 (0x00ffffffffffffff) = Invalid (Implicit/Legacy)
-            // STRICT FILTER: Only allow explicit LINEAR (0). 'Invalid' (Implicit) can fail on NVIDIA with Atomic.
-            mod_val == 0 
-        }).collect();
-        
-        tracing::info!("DEBUG: Total formats: {}, Linear formats: {}", formats.len(), linear_formats.len());
-        if formats.len() > 0 {
-             tracing::info!("DEBUG: First format modifier: {:?}", formats[0].modifier);
-        }
-
-        if !linear_formats.is_empty() {
-            formats = linear_formats;
-        } else {
-            tracing::warn!("⚠️ No LINEAR/INVALID formats found! Falling back to using ALL available formats (AFBC might be enabled).");
-        }
-
-
-        if formats.is_empty() {
-             tracing::error!("❌ No formats supported at all! This is fatal.");
-             return None;
+        // Renderer-exportable dmabuf formats (Fourcc+modifier) from GLES
+        let renderer_formats: Vec<_> = formats_group.into_iter().collect();
+        if renderer_formats.is_empty() {
+            tracing::error!("❌ No formats supported at all! This is fatal.");
+            return None;
         }
 
         let resources = match drm.resource_handles() {
@@ -698,75 +658,19 @@ impl OutputDevice {
         }
         let connector = connector.unwrap();
 
-        // Try to optimize HDMI 2.0 bandwidth usage
         let connector_handle = connector.handle();
-        if let Ok(props) = drm.get_properties(connector_handle) {
-            let (handles, _values) = props.as_props_and_values();
-            for (_i, handle) in handles.iter().enumerate() {
-                if let Ok(info) = drm.get_property(*handle) {
-                    let name = info.name().to_str().unwrap_or("unknown");
-                    
-                    if name == "Colorspace" {
-                         // Force BT2020_YCC (10) to support 4K@60Hz YUV420 on HDMI 2.0
-                         // User's working log confirmed this was set to 10.
-                         let target_value = 10u64;
-                         
-                         if let Err(e) = drm.set_property(connector_handle, *handle, target_value.into()) {
-                             tracing::warn!("Failed to set 'Colorspace' to 10: {:?}", e);
-                         } else {
-                             tracing::info!("✅ Set 'Colorspace' to 10 (BT2020_YCC)");
-                         }
-                    }
+        let _ = connector_handle;
 
-                    if name == "max bpc" {
-                        // Limit to 8 bpc to save bandwidth for 4K@60Hz
-                        if let Err(e) = drm.set_property(connector_handle, *handle, 8u64.into()) {
-                             tracing::warn!("Failed to set 'max bpc': {:?}", e);
-                        } else {
-                             tracing::info!("✅ Set 'max bpc' to 8");
-                        }
-                    }
-                }
-            }
-        }
-
-        // Refresh connector to apply property changes
         let connector = match drm.get_connector(connector_handle, true) {
             Ok(c) => {
-                tracing::info!("🔄 Refreshed connector info after setting properties");
                 c
             },
             Err(e) => {
-                tracing::warn!("Failed to refresh connector after setting properties: {:?}", e);
                 connector // Fallback to old info
             }
         };
 
         let mut modes = connector.modes().to_vec();
-        
-        // HACK: Manually inject YCbCr420_ONLY flag (0x8000) for 4K modes if missing.
-        for mode in modes.iter_mut() {
-             let (w, h) = mode.size();
-             // Check for 4K resolution (3840x2160 or 4096x2160)
-             if (w == 3840 && h == 2160) || (w == 4096 && h == 2160) {
-                 // Check if refresh rate is high enough (>= 50Hz) to require 4:2:0 on HDMI 2.0
-                 // Note: vrefresh is in Hz (u32)
-                 if mode.vrefresh() >= 50 {
-                     const DRM_MODE_FLAG_YCBCR420_ONLY: u32 = 0x8000;
-                     unsafe {
-                          let ptr = mode as *mut _ as *mut u8;
-                          // Offset 28 is flags in drm_mode_modeinfo struct (u32)
-                          let flags_ptr = ptr.add(28) as *mut u32;
-                          let current_flags = *flags_ptr;
-                          
-                          if (current_flags & DRM_MODE_FLAG_YCBCR420_ONLY) == 0 {
-                              *flags_ptr = current_flags | DRM_MODE_FLAG_YCBCR420_ONLY;
-                              tracing::info!("🔧 Forcing YCbCr420_ONLY (0x8000) for 4K mode: {}x{} @ {}Hz. Old flags: 0x{:x}, New flags: 0x{:x}", w, h, mode.vrefresh(), current_flags, *flags_ptr);
-                          }
-                     }
-                 }
-             }
-        }
         
         // Try to preserve existing mode if the output matches.
         let output_name = format!("{:?}", connector.interface());
@@ -812,26 +716,53 @@ impl OutputDevice {
                  }
             });
 
-        // === MODE SELECTION ===
-        let mut candidates: Vec<DrmMode> = modes.to_vec();
-        
-        // Sort: Preferred first, then by refresh rate descending
-        candidates.sort_by(|a, b| {
+        let mut unique_candidates: Vec<DrmMode> = Vec::new();
+        let mut push_unique = |m: DrmMode| {
+            if !unique_candidates.iter().any(|x| x.size() == m.size() && x.vrefresh() == m.vrefresh()) {
+                unique_candidates.push(m);
+            }
+        };
+
+        if let Some(preferred) = modes.iter().find(|m| m.mode_type().contains(ModeTypeFlags::PREFERRED)).copied() {
+            push_unique(preferred);
+        }
+
+        let is_hdmi = output_name.contains("HDMI");
+        if is_hdmi {
+            for m in modes.iter() {
+                if m.size() == (3840, 2160) && m.vrefresh() == 60 {
+                    let bits = m.flags().bits();
+                    const DRM_MODE_FLAG_YCBCR420_ONLY: u32 = 0x8000;
+                    const DRM_MODE_FLAG_YCBCR420: u32 = 0x10000;
+                    const DRM_MODE_FLAG_420_MASK: u32 = DRM_MODE_FLAG_YCBCR420_ONLY | DRM_MODE_FLAG_YCBCR420;
+                    if (bits & DRM_MODE_FLAG_420_MASK) != 0 {
+                        push_unique(*m);
+                    }
+                }
+            }
+        }
+
+        if let Some(fhd60) = modes.iter().find(|m| m.size() == (1920, 1080) && m.vrefresh() == 60).copied() {
+            push_unique(fhd60);
+        }
+        if let Some(hd60) = modes.iter().find(|m| m.size() == (1280, 720) && m.vrefresh() == 60).copied() {
+            push_unique(hd60);
+        }
+
+        let mut rest: Vec<DrmMode> = modes.to_vec();
+        rest.sort_by(|a, b| {
             let a_pref = a.mode_type().contains(ModeTypeFlags::PREFERRED);
             let b_pref = b.mode_type().contains(ModeTypeFlags::PREFERRED);
+            let a_px = (a.size().0 as u64) * (a.size().1 as u64) * (a.vrefresh() as u64);
+            let b_px = (b.size().0 as u64) * (b.size().1 as u64) * (b.vrefresh() as u64);
             match (a_pref, b_pref) {
                 (true, false) => std::cmp::Ordering::Less,
                 (false, true) => std::cmp::Ordering::Greater,
-                _ => b.vrefresh().cmp(&a.vrefresh()),
+                _ => a_px.cmp(&b_px),
             }
         });
-
-        // Simple dedup
-        let mut unique_candidates = Vec::new();
-        for m in candidates {
-            if !unique_candidates.contains(&m) {
-                unique_candidates.push(m);
-            }
+        for m in rest {
+            push_unique(m);
         }
         
         tracing::info!("Candidate Modes for Attempt:");
@@ -840,32 +771,39 @@ impl OutputDevice {
                 i, m.size().0, m.size().1, m.vrefresh(), m.clock(), m.flags().bits());
         }
 
+        let conn_props = if let Ok(props) = drm.get_properties(connector.handle()) {
+            let (handles, _values) = props.as_props_and_values();
+            let mut colorspace = None;
+            let mut max_bpc = None;
+            let mut hdr_metadata = None;
+            for h in handles {
+                if let Ok(info) = drm.get_property(*h) {
+                    if let Ok(name) = info.name().to_str() {
+                        if name == "Colorspace" { colorspace = Some(*h); }
+                        if name == "max bpc" { max_bpc = Some(*h); }
+                        if name == "HDR_OUTPUT_METADATA" { hdr_metadata = Some(*h); }
+                    }
+                }
+            }
+            Some((colorspace, max_bpc, hdr_metadata))
+        } else { None };
+
+        if let Some((colorspace, max_bpc, hdr)) = conn_props {
+            if let Some(pid) = colorspace {
+                let _ = drm.set_property(connector.handle(), pid, 0u64);
+            }
+            if let Some(pid) = hdr {
+                let _ = drm.set_property(connector.handle(), pid, 0u64);
+            }
+            if let Some(pid) = max_bpc {
+                let _ = drm.set_property(connector.handle(), pid, 8u64);
+            }
+        }
+
         for (attempt, attempted_mode) in unique_candidates.iter().enumerate() {
             tracing::info!("🚀 Attempting Mode #{}: {:?}", attempt, attempted_mode);
 
-            // 1. Prepare Mode (Hack for 4K Bandwidth)
-            let mut mode_to_use = *attempted_mode;
-            
-            // FIX: Force YCbCr420_ONLY (0x8000) for 4K modes to fit HDMI 2.0 bandwidth
-            // This prevents "Invalid Argument" errors on NVIDIA/Atomic when using 4K@60Hz.
-            if mode_to_use.size().0 == 3840 && mode_to_use.size().1 == 2160 {
-                 // 0x8000 is DRM_MODE_FLAG_YCbCr420_ONLY
-                 const DRM_MODE_FLAG_YCBCR420_ONLY: u32 = 0x8000;
-                 
-                 unsafe {
-                      let ptr = &mut mode_to_use as *mut DrmMode as *mut u8;
-                      let flags_ptr = ptr.add(28) as *mut u32;
-                      let current_flags = *flags_ptr;
-                      
-                      tracing::info!("DEBUG: 4K Mode Flags Check. Current: 0x{:x}, Target: 0x{:x}", current_flags, current_flags | DRM_MODE_FLAG_YCBCR420_ONLY);
-                      
-                      // Only add if not present
-                      if (current_flags & DRM_MODE_FLAG_YCBCR420_ONLY) == 0 {
-                         *flags_ptr = current_flags | DRM_MODE_FLAG_YCBCR420_ONLY;
-                         tracing::info!("🔧 Forced YCbCr420_ONLY (0x8000) for 4K mode. Old flags: 0x{:x}, New flags: 0x{:x}", current_flags, *flags_ptr);
-                      }
-                  }
-            }
+            let mode_to_use = *attempted_mode;
 
             // 1. Create Surface
             let surface_opt = Self::create_surface(drm, resources.clone(), &connector, mode_to_use);
@@ -875,6 +813,9 @@ impl OutputDevice {
                 continue;
             }
             let surface = surface_opt.unwrap();
+
+            // Use renderer-exportable formats; DrmCompositor will negotiate with plane capabilities
+            let intersect_formats = renderer_formats.clone();
 
             // 2. Create Allocator
             let gbm_flags = GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT;
@@ -918,7 +859,7 @@ impl OutputDevice {
                 allocator,
                 GbmFramebufferExporter::new(gbm.clone(), NodeFilter::All),
                 SUPPORTED_COLOR_FORMATS.iter().copied(),
-                formats.clone(), 
+                intersect_formats.clone(), 
                 Size::default(),
                 None,
             );
@@ -929,8 +870,46 @@ impl OutputDevice {
                     return Some((compositor, connector.handle()));
                 },
                 Err(e) => {
-                    tracing::error!("❌ Mode-setting failed for mode #{}: {:?}", attempt, e);
-                    tracing::warn!("Retrying with next candidate...");
+                    tracing::warn!("Mode-setting failed for mode #{}: {:?}", attempt, e);
+                    if let Some((colorspace, max_bpc, hdr)) = conn_props {
+                        let mut retried = false;
+                        if hdr.is_some() {
+                            if let Some(pid) = max_bpc {
+                                let _ = drm.set_property(connector.handle(), pid, 10u64);
+                            }
+                            if let Some(pid) = colorspace {
+                                let _ = drm.set_property(connector.handle(), pid, 10u64);
+                            }
+                            // Recreate surface for retry as the previous value was moved
+                            if let Some(surface2) = Self::create_surface(drm, resources.clone(), &connector, mode_to_use) {
+                                let gbm_flags = GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT;
+                                let allocator = GbmAllocator::new(gbm.clone(), gbm_flags);
+                                let retry = DrmCompositor::new(
+                                    windows.canvas(),
+                                    surface2,
+                                    None,
+                                    allocator,
+                                    GbmFramebufferExporter::new(gbm.clone(), NodeFilter::All),
+                                    SUPPORTED_COLOR_FORMATS.iter().copied(),
+                                    intersect_formats.clone(),
+                                    Size::default(),
+                                    None,
+                                );
+                                if let Ok(compositor) = retry {
+                                    tracing::info!("✅ Successfully created DrmCompositor with mode #{} after HDR/max_bpc retry", attempt);
+                                    return Some((compositor, connector.handle()));
+                                }
+                            } else {
+                                tracing::warn!("Retry surface creation failed for mode #{}", attempt);
+                            }
+                            retried = true;
+                        }
+                        if !retried {
+                            tracing::warn!("Retrying with next candidate...");
+                        }
+                    } else {
+                        tracing::warn!("Retrying with next candidate...");
+                    }
                 }
             }
         }

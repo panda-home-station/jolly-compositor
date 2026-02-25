@@ -3,7 +3,6 @@
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::os::fd::OwnedFd;
-use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{cmp, env, mem};
@@ -104,9 +103,6 @@ use crate::{daemon, delegate_screencopy, trace_error};
 
 /// Time before xdg_activation tokens are invalidated.
 const ACTIVATION_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// The script to run after compositor start.
-const INIT_EXEC: &str = "initrc";
 
 /// Number of frames considered for best-case rendering times.
 const RECENT_FRAME_COUNT: usize = 16;
@@ -310,31 +306,6 @@ impl Catacomb {
         // Disable accelerometer polling if orientation starts locked.
         if windows.orientation_locked() {
             trace_error!(event_loop.disable(&accel_token));
-        }
-
-        // Run user startup script.
-        let user_config = dirs::config_dir().map(|dir| dir.join("catacomb").join(INIT_EXEC));
-        match user_config {
-            Some(user_config) if user_config.exists() => {
-                info!("Loading user config at {:?}", user_config);
-
-                if let Err(err) = crate::daemon(user_config.as_os_str(), []) {
-                    error!("Unable to launch {user_config:?}: {err}");
-                }
-            },
-            _ => {
-                let global_path = format!("/etc/catacomb/{INIT_EXEC}");
-                let global_path = Path::new(&global_path);
-                if global_path.exists() {
-                    info!("Loading global config at {:?}", global_path);
-
-                    if let Err(err) = crate::daemon(global_path.as_os_str(), []) {
-                        error!("Unable to launch {global_path:?}: {err}");
-                    }
-                } else {
-                    info!("No configuration script found");
-                }
-            },
         }
 
         // Initialize Gilrs.

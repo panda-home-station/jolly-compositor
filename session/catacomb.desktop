@@ -1,6 +1,0 @@
-[Desktop Entry]
-Name=Catacomb
-Comment=Wayland Mobile Compositor
-Exec=catacomb-session
-Terminal=false
-Type=Application

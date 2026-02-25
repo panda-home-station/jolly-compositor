@@ -10,7 +10,9 @@ use clap::{Parser, Subcommand};
 use profiling::puffin;
 #[cfg(feature = "profiling")]
 use puffin_http::Server;
-use tracing_subscriber::{EnvFilter, FmtSubscriber};
+use tracing_subscriber::{EnvFilter};
+use tracing_subscriber::fmt;
+use tracing_subscriber::prelude::*;
 
 mod backend;
 mod config;
@@ -43,13 +45,40 @@ pub fn run() {
         Server::new(&format!("0.0.0.0:{}", puffin_http::DEFAULT_PORT)).unwrap()
     };
 
-    // Setup logging.
     let directives = env::var("RUST_LOG").unwrap_or(
         "info,catacomb=info,smithay::xwayland::xwm=error,smithay::backend::drm=error,calloop::loop_logic=error"
             .into(),
     );
     let env_filter = EnvFilter::builder().parse_lossy(directives);
-    FmtSubscriber::builder().with_env_filter(env_filter).with_line_number(true).init();
+
+    let base_state = env::var("XDG_STATE_HOME")
+        .ok()
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            dirs::home_dir().map(|h| h.join(".local").join("state"))
+        })
+        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
+    let log_dir = base_state.join("jollypad").join("logs");
+    let _ = std::fs::create_dir_all(&log_dir);
+    let log_file_path = log_dir.join("jollypad-catacomb.log");
+
+    let file_writer = {
+        let path = log_file_path.clone();
+        move || {
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)
+                .map(|f| -> Box<dyn std::io::Write + Send> { Box::new(f) })
+                .unwrap_or_else(|_| Box::new(std::io::stderr()))
+        }
+    };
+
+    tracing_subscriber::registry()
+        .with(env_filter)
+        .with(fmt::layer().with_line_number(true))
+        .with(fmt::layer().with_line_number(true).with_writer(file_writer))
+        .init();
 
     // Add panic hook
     std::panic::set_hook(Box::new(|info| {
