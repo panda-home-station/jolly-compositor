@@ -36,7 +36,7 @@ pub enum Subcommands {
     Msg(IpcMessage),
 }
 
-pub fn main() {
+pub fn run() {
     #[cfg(feature = "profiling")]
     let _server = {
         puffin::set_scopes_on(true);

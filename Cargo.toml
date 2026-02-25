@@ -14,6 +14,10 @@ edition = "2024"
 default = []
 profiling = ["dep:profiling", "dep:puffin_http"]
 
+[lib]
+name = "catacomb"
+path = "src/lib.rs"
+
 [dependencies.smithay]
 git = "https://github.com/smithay/smithay"
 rev = "06c9930f2b61f7d4b08a1f525fa114fd4492ac98"
