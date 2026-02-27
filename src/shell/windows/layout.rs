@@ -98,6 +98,9 @@ impl Layouts {
     pub fn push_active_to_parent(&mut self) {
         let active_layout = self.active();
         if active_layout.id != DEFAULT_LAYOUT.id {
+            let primary_t = active_layout.primary().map(|w| w.borrow().title().unwrap_or_default()).unwrap_or_default();
+            let secondary_t = active_layout.secondary().map(|w| w.borrow().title().unwrap_or_default()).unwrap_or_default();
+            info!("Layouts: push_active_to_parent id={} primary='{}' secondary='{}'", active_layout.id.0, primary_t, secondary_t);
             self.parent_layouts.push(active_layout.id);
         }
     }
@@ -106,6 +109,9 @@ impl Layouts {
     pub fn textures_underlay(&self, textures: &mut Vec<CatacombElement>, scale: f64) {
         if let Some(parent_id) = self.parent_layouts.last() {
             if let Some(layout) = self.layouts.iter().find(|l| &l.id == parent_id) {
+                let p_t = layout.primary().map(|w| w.borrow().title().unwrap_or_default()).unwrap_or_default();
+                let s_t = layout.secondary().map(|w| w.borrow().title().unwrap_or_default()).unwrap_or_default();
+                info!("Underlay: using parent id={} primary='{}' secondary='{}'", parent_id.0, p_t, s_t);
                 if let Some(secondary) = layout.secondary().map(|window| window.borrow()) {
                     secondary.textures(textures, scale, None, None);
                 }
@@ -117,6 +123,9 @@ impl Layouts {
              // Fallback to first layout (Desktop) if no parent
              // Only if the current active layout is NOT the first one (to avoid self-render)
              if self.active_layout != Some(0) {
+                let p_t = layout.primary().map(|w| w.borrow().title().unwrap_or_default()).unwrap_or_default();
+                let s_t = layout.secondary().map(|w| w.borrow().title().unwrap_or_default()).unwrap_or_default();
+                info!("Underlay: fallback to first layout primary='{}' secondary='{}'", p_t, s_t);
                 if let Some(secondary) = layout.secondary().map(|window| window.borrow()) {
                     secondary.textures(textures, scale, None, None);
                 }
@@ -172,9 +181,18 @@ impl Layouts {
 
         // Clear layout history.
         if clear_parents {
+            info!("Layouts: clear_parents requested, clearing {} parent(s)", self.parent_layouts.len());
             self.parent_layouts.clear();
         }
 
+        if let Some(i) = layout_index {
+            let tgt = self.layouts.get(i);
+            let p_t = tgt.and_then(|l| l.primary().map(|w| w.borrow().title().unwrap_or_default())).unwrap_or_default();
+            let s_t = tgt.and_then(|l| l.secondary().map(|w| w.borrow().title().unwrap_or_default())).unwrap_or_default();
+            info!("Layouts: set_active index={} primary='{}' secondary='{}'", i, p_t, s_t);
+        } else {
+            info!("Layouts: set_active None");
+        }
         self.add_transaction(Transaction::Active(layout_index));
     }
 

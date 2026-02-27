@@ -62,6 +62,9 @@ pub fn run() {
     let _ = std::fs::create_dir_all(&log_dir);
     let log_file_path = log_dir.join("jollypad-catacomb.log");
 
+    // Truncate the log file at the start of each run to avoid accumulation across runs
+    let _ = std::fs::File::create(&log_file_path);
+
     let file_writer = {
         let path = log_file_path.clone();
         move || {

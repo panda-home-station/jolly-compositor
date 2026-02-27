@@ -440,17 +440,23 @@ impl Windows {
             // Special handling for Overlay to preserve parent history
             let is_overlay = {
                 if let Some(layout) = self.layouts.get(position.index) {
-                     layout.primary().map(|w| w.borrow().title().unwrap_or_default() == "JollyPad-Overlay").unwrap_or(false)
-                } else {
-                    false
-                }
+                    layout.primary().map(|w| {
+                        let ww = w.borrow();
+                        let x = ww.xdg_app_id().unwrap_or_default();
+                        let a = ww.app_id.clone().unwrap_or_default();
+                        let role_match = self.system_roles.get("nav").map(|m| {
+                            m.matches(Some(&x)) || m.matches(Some(&a))
+                        }).unwrap_or(false);
+                        role_match || x == "jolly-nav" || a == "jolly-nav"
+                    }).unwrap_or(false)
+                } else { false }
             };
 
             if is_overlay {
-                info!("focus_app: Switching to Overlay (position {:?}). Pushing active to parent.", position);
+            info!("focus_app: Switching to Overlay (position {:?}). Pushing active to parent.", position);
                 self.layouts.push_active_to_parent();
                 self.layouts.set_active(&self.output, Some(position), false);
-                
+            info!("focus_app: View before overlay ensure: {:?}", match &self.view { View::Workspace => "Workspace", View::Overview(_) => "Overview", View::DragAndDrop(_) => "DragAndDrop", View::Fullscreen(_) => "Fullscreen", View::Lock(_) => "Lock" });
                 // Ensure view is Workspace or Fullscreen(overlay) so it actually renders
                 if matches!(self.view, View::Fullscreen(_)) {
                     // If we were in fullscreen app, we need to switch view to overlay if we want it on top
@@ -458,7 +464,7 @@ impl Windows {
                     // For now, let's try switching to Workspace view which handles layers + layouts
                     self.set_view(View::Workspace);
                 }
-                
+            info!("focus_app: View after overlay ensure: {:?}", match &self.view { View::Workspace => "Workspace", View::Overview(_) => "Overview", View::DragAndDrop(_) => "DragAndDrop", View::Fullscreen(_) => "Fullscreen", View::Lock(_) => "Lock" });
                 // FORCE RESIZE to ensure it renders on top
                 self.resize_visible();
             } else {
@@ -477,10 +483,8 @@ impl Windows {
     /// Toggle application visibility: focus if hidden/inactive, switch to previous if active.
     pub fn toggle_app(&mut self, app_id: AppIdMatcher) -> bool {
         // Check if the app is currently active
-        // We check both title and app_id because sometimes the matcher is against title
         let (title, current_id) = self.active_window_info().unwrap_or(("None".to_string(), "None".to_string()));
-        
-        let is_active = app_id.matches(Some(&current_id)) || app_id.matches(Some(&title));
+        let is_active = app_id.matches(Some(&current_id));
         
         info!("toggle_app: Request={:?}, ActiveTitle='{}', ActiveID='{}', IsActive={}", app_id, title, current_id, is_active);
 
@@ -498,10 +502,7 @@ impl Windows {
                 let window = window.borrow();
                 let xdg_id = window.xdg_app_id();
                 let id = xdg_id.as_ref().or(window.app_id.as_ref());
-                let title = window.title();
-                
-                // Match against ID or Title
-                if app_id.matches(id) || (title.is_some() && app_id.matches(title.as_ref())) {
+                if app_id.matches(id) {
                     drop(window);
                     self.set_view(View::Workspace);
                     self.resize_visible();
@@ -514,11 +515,10 @@ impl Windows {
             let desktop_index = self.layouts.layouts().iter().position(|l| {
                 if let Some(p) = l.primary() {
                     let w = p.borrow();
-                    let t = w.title().unwrap_or_default();
                     let xdg_id = w.xdg_app_id().unwrap_or_default();
                     let app_id = w.app_id.clone().unwrap_or_default();
                     if let Some(home_matcher) = role_home {
-                        home_matcher.matches(Some(&app_id)) || home_matcher.matches(Some(&t)) || home_matcher.matches(Some(&xdg_id))
+                        home_matcher.matches(Some(&app_id)) || home_matcher.matches(Some(&xdg_id))
                     } else {
                         false
                     }
@@ -534,6 +534,7 @@ impl Windows {
                  info!("toggle_app: Found parent layout ID {:?}, switching back to it.", parent_id);
                  if let Some(index) = self.layouts.layouts().iter().position(|l| l.id == parent_id) {
                      self.layouts.set_active(&self.output, Some(LayoutPosition::new(index, false)), true);
+                     info!("toggle_app: Switched back to parent index {}", index);
                      return true;
                  } else {
                      info!("toggle_app: Parent layout ID {:?} not found in current layouts, falling back.", parent_id);
@@ -545,6 +546,7 @@ impl Windows {
                  self.layouts.set_active(&self.output, Some(LayoutPosition::new(index, false)), true);
             } else if self.layouts.len() <= 1 {
                 self.layouts.set_active(&self.output, None, true);
+                info!("toggle_app: No desktop found and <=1 layouts, set_active None");
             } else {
                 // Fallback: If we can't find desktop, and we have multiple layouts, 
                 // defaulting to Layout 0 is safer than cycling blindly if cycling fails.
@@ -555,6 +557,7 @@ impl Windows {
 
         } else {
             // If not active, focus it.
+            info!("toggle_app: Target not active, focusing it.");
             self.focus_app(app_id)
         }
     }
@@ -797,12 +800,34 @@ impl Windows {
         self.layouts.focus = Some(Rc::downgrade(&window));
 
         // Only switch to Fullscreen if it's NOT the overlay
-        let is_overlay = window.borrow().title().unwrap_or_default() == "JollyPad-Overlay";
+        let is_overlay = {
+            let w = window.borrow();
+            let xdg_id = w.xdg_app_id().unwrap_or_default();
+            let app_id = w.app_id().clone().unwrap_or_default();
+            let title = w.title().unwrap_or_default();
+            let role_match = self.system_roles.get("nav").map(|m| {
+                m.matches(Some(&xdg_id)) || m.matches(Some(&app_id))
+            }).unwrap_or(false);
+            let env_fallback = std::env::var("JOLLYPAD_OVERLAY_FALLBACK").unwrap_or_default();
+            let allow_title = env_fallback.is_empty() || env_fallback == "title" || env_fallback == "1" || env_fallback.eq_ignore_ascii_case("true");
+            let by_title = allow_title && title == "JollyPad-Overlay";
+            info!(
+                "add: xdg_id='{}' app_id='{}' title='{}' role_match={} fallback_title_allowed={} by_title={}",
+                xdg_id, app_id, title, role_match, allow_title, by_title
+            );
+            xdg_id == "jolly-nav" || app_id == "jolly-nav" || role_match || by_title
+        };
         if !is_overlay {
-            // Switch view to Fullscreen immediately for normal apps
+            info!(
+                "add: new XDG window '{}' -> Fullscreen view",
+                window.borrow().title().unwrap_or_default()
+            );
             self.view = View::Fullscreen(window.clone());
         } else {
-            // For overlay, ensure we stay in Workspace mode so we can see underlay
+            info!(
+                "add: new XDG window '{}' identified as Overlay -> Workspace view",
+                window.borrow().title().unwrap_or_default()
+            );
             self.view = View::Workspace;
         }
 
@@ -974,9 +999,49 @@ impl Windows {
         }
 
         // Handle XDG surface commits.
-        if let Some(mut window) = find_window!(self.layouts.windows_mut()) {
-            window.surface_commit_common(scale, &self.window_scales, surface);
-            return;
+        if true {
+            let mut need_switch = false;
+            if let Some(mut window) = find_window!(self.layouts.windows_mut()) {
+                let before_title = window.title().unwrap_or_default();
+                let before_xdg = window.xdg_app_id().unwrap_or_default();
+                let before_app = window.app_id.clone().unwrap_or_default();
+                window.surface_commit_common(scale, &self.window_scales, surface);
+                let after_title = window.title().unwrap_or_default();
+                let after_xdg = window.xdg_app_id().unwrap_or_default();
+                let after_app = window.app_id.clone().unwrap_or_default();
+                info!(
+                    "commit: XDG window update title='{}'->'{}' xdg_id='{}'->'{}' app_id='{}'->'{}' view={}",
+                    before_title,
+                    after_title,
+                    before_xdg,
+                    after_xdg,
+                    before_app,
+                    after_app,
+                    match &self.view { View::Workspace => "Workspace", View::Overview(_) => "Overview", View::DragAndDrop(_) => "DragAndDrop", View::Fullscreen(_) => "Fullscreen", View::Lock(_) => "Lock" }
+                );
+                let role_match = self.system_roles.get("nav").map(|m| {
+                    m.matches(Some(&after_xdg)) || m.matches(Some(&after_app))
+                }).unwrap_or(false);
+                let env_fallback = std::env::var("JOLLYPAD_OVERLAY_FALLBACK").unwrap_or_default();
+                let allow_title = env_fallback.is_empty() || env_fallback == "title" || env_fallback == "1" || env_fallback.eq_ignore_ascii_case("true");
+                let by_title = allow_title && after_title == "JollyPad-Overlay";
+                let is_overlay = after_xdg == "jolly-nav" || after_app == "jolly-nav" || role_match || by_title;
+                info!(
+                    "commit: overlay_check xdg_id='{}' app_id='{}' title='{}' role_match={} allow_title={} by_title={} is_overlay={}",
+                    after_xdg, after_app, after_title, role_match, allow_title, by_title, is_overlay
+                );
+                if is_overlay && matches!(self.view, View::Fullscreen(_)) {
+                    need_switch = true;
+                }
+            }
+            if need_switch {
+                info!("commit: overlay identified post-map, switching view to Workspace");
+                self.set_view(View::Workspace);
+                self.resize_visible();
+            }
+            if need_switch {
+                return;
+            }
         }
 
         // Handle popup orphan adoption.
@@ -1137,9 +1202,21 @@ impl Windows {
 
                 self.layouts.textures(&mut self.textures, scale);
 
-                // If active layout is overlay, render underlay behind it
-                let is_overlay = self.layouts.active().primary().map(|w| w.borrow().title().unwrap_or_default() == "JollyPad-Overlay").unwrap_or(false);
+                let is_overlay = self.layouts.active().primary().map(|w| {
+                    let ww = w.borrow();
+                    let x = ww.xdg_app_id().unwrap_or_default();
+                    let a = ww.app_id.clone().unwrap_or_default();
+                    let t = ww.title().unwrap_or_default();
+                    let role_match = self.system_roles.get("nav").map(|m| {
+                        m.matches(Some(&x)) || m.matches(Some(&a))
+                    }).unwrap_or(false);
+                    let env_fallback = std::env::var("JOLLYPAD_OVERLAY_FALLBACK").unwrap_or_default();
+                    let allow_title = env_fallback.is_empty() || env_fallback == "title" || env_fallback == "1" || env_fallback.eq_ignore_ascii_case("true");
+                    let by_title = allow_title && t == "JollyPad-Overlay";
+                    role_match || x == "jolly-nav" || a == "jolly-nav" || by_title
+                }).unwrap_or(false);
                 if is_overlay {
+                    info!("textures: overlay active in Workspace; drawing underlay");
                     self.layouts.textures_underlay(&mut self.textures, scale);
                 }
 
@@ -1176,9 +1253,21 @@ impl Windows {
 
                 window.borrow().textures(&mut self.textures, scale, None, None);
                 
-                // If fullscreen window is overlay, render underlay behind it
-                let is_overlay = window.borrow().title().unwrap_or_default() == "JollyPad-Overlay";
+                let is_overlay = {
+                    let ww = window.borrow();
+                    let x = ww.xdg_app_id().unwrap_or_default();
+                    let a = ww.app_id.clone().unwrap_or_default();
+                    let t = ww.title().unwrap_or_default();
+                    let role_match = self.system_roles.get("nav").map(|m| {
+                        m.matches(Some(&x)) || m.matches(Some(&a))
+                    }).unwrap_or(false);
+                    let env_fallback = std::env::var("JOLLYPAD_OVERLAY_FALLBACK").unwrap_or_default();
+                    let allow_title = env_fallback.is_empty() || env_fallback == "title" || env_fallback == "1" || env_fallback.eq_ignore_ascii_case("true");
+                    let by_title = allow_title && t == "JollyPad-Overlay";
+                    role_match || x == "jolly-nav" || a == "jolly-nav" || by_title
+                };
                 if is_overlay {
+                    info!("textures: overlay active in Fullscreen; drawing underlay");
                     self.layouts.textures_underlay(&mut self.textures, scale);
                 }
             },

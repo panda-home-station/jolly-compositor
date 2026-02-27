@@ -203,6 +203,8 @@ fn handle_message(buffer: &mut String, mut stream: UnixStream, catacomb: &mut Ca
                 },
             };
 
+            let active = catacomb.windows.active_window_info().unwrap_or(("".to_string(), "".to_string()));
+            info!("IPC: ToggleWindow request={:?} active_title='{}' active_id='{}'", app_id.base(), active.0, active.1);
             if catacomb.windows.toggle_app(app_id) {
                 catacomb.unstall();
             }
@@ -278,7 +280,18 @@ fn handle_message(buffer: &mut String, mut stream: UnixStream, catacomb: &mut Ca
             let role = role.as_str();
             let act = action.as_str();
             if (role == "nav" || role == "overlay") && act == "toggle" {
-                if let Ok(app) = AppIdMatcher::try_from("JollyPad-Overlay".to_string()) {
+                let matcher = catacomb.windows.system_role(role)
+                    .or_else(|| catacomb.windows.system_role("overlay"))
+                    .or_else(|| catacomb.windows.system_role("nav"));
+                if let Some(app) = matcher {
+                    let active = catacomb.windows.active_window_info().unwrap_or(("".to_string(), "".to_string()));
+                    info!("IPC: RoleAction toggle role='{}' using_system_role active_title='{}' active_id='{}'", role, active.0, active.1);
+                    if catacomb.windows.toggle_app(app) {
+                        catacomb.unstall();
+                    }
+                } else if let Ok(app) = AppIdMatcher::try_from("^(jolly-nav|JollyPad-Overlay)$".to_string()) {
+                    let active = catacomb.windows.active_window_info().unwrap_or(("".to_string(), "".to_string()));
+                    info!("IPC: RoleAction toggle role='{}' fallback matcher active_title='{}' active_id='{}'", role, active.0, active.1);
                     if catacomb.windows.toggle_app(app) {
                         catacomb.unstall();
                     }
@@ -286,11 +299,13 @@ fn handle_message(buffer: &mut String, mut stream: UnixStream, catacomb: &mut Ca
                 return;
             }
             if role == "overlay" && act == "back" {
-                if let Ok(app) = AppIdMatcher::try_from("JollyPad-Overlay".to_string()) {
-                    // Only hide if currently active. Do not toggle on if inactive.
+                let matcher = catacomb.windows.system_role("overlay")
+                    .or_else(|| catacomb.windows.system_role("nav"))
+                    .or_else(|| AppIdMatcher::try_from("^(jolly-nav|JollyPad-Overlay)$".to_string()).ok());
+                if let Some(app) = matcher {
                     let (title, current_id) = catacomb.windows.active_window_info().unwrap_or(("".to_string(), "".to_string()));
-                    let is_active = app.matches(Some(&current_id)) || app.matches(Some(&title));
-                    
+                    let is_active = app.matches(Some(&current_id));
+                    info!("IPC: RoleAction overlay/back active_title='{}' active_id='{}' is_active={}", title, current_id, is_active);
                     if is_active {
                         if catacomb.windows.toggle_app(app) {
                             catacomb.unstall();
