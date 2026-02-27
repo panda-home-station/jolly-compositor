@@ -803,7 +803,7 @@ impl Windows {
         let is_overlay = {
             let w = window.borrow();
             let xdg_id = w.xdg_app_id().unwrap_or_default();
-            let app_id = w.app_id().clone().unwrap_or_default();
+            let app_id = w.app_id.clone().unwrap_or_default();
             let title = w.title().unwrap_or_default();
             let role_match = self.system_roles.get("nav").map(|m| {
                 m.matches(Some(&xdg_id)) || m.matches(Some(&app_id))
